@@ -93,7 +93,13 @@ export function DevicesScreen({onSelect}: Props) {
         data={ports}
         keyExtractor={(_, i) => String(i)}
         ListEmptyComponent={
-          <Text style={styles.empty}>{'<no USB devices found>'}</Text>
+          <View>
+            <Text style={styles.empty}>{'<no USB devices found>'}</Text>
+            <Text style={styles.emptyHint}>
+              Only devices this app already has USB permission for are listed.
+              {'\n'}Use “Connect new device…” to grant access to a device.
+            </Text>
+          </View>
         }
         renderItem={({item}) => {
           const info = item.getInfo();
@@ -129,6 +135,13 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     color: colors.textSecondary,
     marginTop: 24,
+  },
+  emptyHint: {
+    fontSize: 13,
+    textAlign: 'center',
+    color: colors.textSecondary,
+    marginTop: 12,
+    paddingHorizontal: 24,
   },
   item: {paddingVertical: 8, paddingHorizontal: 12},
   text1: {fontSize: 16, color: colors.text, marginTop: 4, marginHorizontal: 12},

@@ -25,6 +25,11 @@ export type PortId = {
   portNumber: number;
   usbVendorId: number;
   usbProductId: number;
+  /**
+   * Whether the app currently holds Android USB permission to access this
+   * device (via the system attach dialog or a prior permission request).
+   */
+  hasPermission: boolean;
 };
 
 export type DataEvent = {

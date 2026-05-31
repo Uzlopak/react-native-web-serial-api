@@ -93,6 +93,8 @@ public class NativeUsbSerialModule extends NativeUsbSerialSpec {
                     result.putInt("portNumber", portNumber);
                     result.putInt("usbVendorId", driver.getDevice().getVendorId());
                     result.putInt("usbProductId", driver.getDevice().getProductId());
+                    // Permission was just granted above, so this port is accessible.
+                    result.putBoolean("hasPermission", true);
                     promise.resolve(result);
                 }
             });
@@ -226,6 +228,10 @@ public class NativeUsbSerialModule extends NativeUsbSerialSpec {
             WritableArray result = Arguments.createArray();
             for (UsbSerialDriver driver : drivers) {
                 UsbDevice device = driver.getDevice();
+                // Whether the app already holds Android USB permission for this
+                // device. This is granted either via the system "use by default"
+                // attach dialog or a prior requestPermission()/requestPort() flow.
+                boolean hasPermission = usbManager.hasPermission(device);
                 List<UsbSerialPort> ports = driver.getPorts();
                 for (int i = 0; i < ports.size(); i++) {
                     WritableMap map = Arguments.createMap();
@@ -233,6 +239,7 @@ public class NativeUsbSerialModule extends NativeUsbSerialSpec {
                     map.putInt("portNumber", i);
                     map.putInt("usbVendorId", device.getVendorId());
                     map.putInt("usbProductId", device.getProductId());
+                    map.putBoolean("hasPermission", hasPermission);
                     result.pushMap(map);
                 }
             }

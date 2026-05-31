@@ -980,12 +980,23 @@ export class Serial extends EventTarget {
     // 3.1. Let availablePorts be the sequence of available serial ports which
     // the user has allowed the site to access as the result of a previous call
     // to requestPort().
+    // Modification for Android: availablePorts is the sequence of all
+    // USB-serial ports the app has permission to access, which includes ports
+    // previously granted via requestPort() AND ports the app was granted native
+    // permission for (e.g. "use by default for this device" attach dialog).
     const portIds = await usb.findAllDrivers();
 
     // 3.2. Let ports be the sequence of the SerialPorts representing the ports
     // in availablePorts.
     const ports: SerialPort[] = [];
-    for (const {deviceId, portNumber, usbVendorId, usbProductId} of portIds) {
+    for (const {
+      deviceId,
+      portNumber,
+      usbVendorId,
+      usbProductId,
+      hasPermission,
+    } of portIds) {
+      if (!hasPermission) continue;
       const key = this.#portKey(deviceId, portNumber);
       if (!this.#knownPorts.has(key)) {
         this.#knownPorts.set(
