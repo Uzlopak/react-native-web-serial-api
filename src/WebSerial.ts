@@ -865,6 +865,16 @@ export class Serial extends EventTarget {
   #initialized = false;
 
   /**
+   * Subscribing to "connect"/"disconnect" must wire up the native USB state
+   * listeners, so a consumer can receive attach/detach/permission events
+   * without first calling getPorts()/requestPort().
+   */
+  addEventListener(...args: Parameters<EventTarget['addEventListener']>): void {
+    this.#ensureInit();
+    super.addEventListener(...args);
+  }
+
+  /**
    * Lazily acquire the native USB-serial module and wire connect/disconnect
    * listeners on first use (getPorts/requestPort) rather than at construction.
    * Deferring native access out of the module-import path avoids touching the
@@ -977,13 +987,12 @@ export class Serial extends EventTarget {
     const usb = this.#ensureInit();
     if (!usb) return []; // Native module not available
 
-    // 3.1. Let availablePorts be the sequence of available serial ports which
-    // the user has allowed the site to access as the result of a previous call
-    // to requestPort().
-    // Modification for Android: availablePorts is the sequence of all
-    // USB-serial ports the app has permission to access, which includes ports
-    // previously granted via requestPort() AND ports the app was granted native
-    // permission for (e.g. "use by default for this device" attach dialog).
+    // 3.1. Let availablePorts be the sequence of available serial ports the app
+    // can currently access. On Android this means every probed USB-serial port
+    // the app already holds USB permission for — whether that permission came
+    // from requestPort() or was granted natively (e.g. the system "use by
+    // default for this device" attach dialog). Ports the app cannot yet access
+    // are excluded; the user grants access for those via requestPort().
     const portIds = await usb.findAllDrivers();
 
     // 3.2. Let ports be the sequence of the SerialPorts representing the ports

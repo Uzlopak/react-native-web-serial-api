@@ -87,11 +87,61 @@ serial.addEventListener('disconnect', () => console.log('device detached'));
 port.addEventListener('disconnect', () => console.log('this port went away'));
 ```
 
+On Android, `serial` fires `connect` when a USB device is **attached** _and_ when
+the app is **granted USB permission** for a device (the latter matters because
+Android revokes permission on unplug, so a re-attached device only becomes
+accessible — and shows up in `getPorts()` — once permission is re-granted).
+Simply subscribing with `serial.addEventListener('connect', …)` is enough to
+receive these; you don't need to call `getPorts()` first. A common pattern is to
+re-run `getPorts()` on every `connect`/`disconnect` to keep a device list fresh.
+
 ### Listing already-permitted ports
 
 ```ts
 const ports = await serial.getPorts();
 ```
+
+## Permission model (Android vs. Web Serial)
+
+There are two distinct notions of "permission" in play, and they behave
+differently on Android than in the browser:
+
+- **Web Serial permission grant** — `serial.requestPort()`. In the browser this
+  records a site-level grant for the chosen port; on Android it shows a native
+  picker and requests the Android USB permission for the selected device. This
+  is the mechanism for gaining access to a device you don't have access to yet,
+  and it is **unchanged** by anything below.
+- **Native Android USB permission** — `UsbManager` permission for a device.
+  This can be granted **outside** the app entirely: when you plug a device in,
+  Android may show its own _"Open <app> to handle this USB device? / use by
+  default for this device"_ dialog, or the app may have been launched via a
+  `USB_DEVICE_ATTACHED` intent filter. In those cases the app already holds USB
+  permission without ever calling `requestPort()`.
+
+**`serial.getPorts()` in Android/native mode** returns **every probed
+USB-serial port the app can currently access through Android USB permission** —
+regardless of how that permission was obtained. So a device granted via the
+system attach dialog appears in `getPorts()` even though `requestPort()` was
+never called for it. Probed devices the app does **not** yet have permission for
+are excluded; use `requestPort()` to gain access to those.
+
+```ts
+// All devices accessible right now (natively-granted OR previously requested):
+const ports = await serial.getPorts();
+
+// Gain access to a device you don't have permission for yet:
+const port = await serial.requestPort();
+```
+
+On the **web**, `getPorts()` returns the ports the user has previously granted
+the site via `requestPort()` (the browser's persistent permission store) — the
+native "attach dialog" notion does not apply.
+
+> Note: this is a deliberate, Android-appropriate reading of the Web Serial
+> spec's `getPorts()` ("ports the site has been granted access to"). On Android
+> the unit of access is the OS-level USB permission, so a device the OS has
+> already authorized for the app is, by definition, one the app has been
+> granted access to.
 
 ## API
 

@@ -111,6 +111,20 @@ public class NativeUsbSerialModule extends NativeUsbSerialSpec {
                 if (promise != null) {
                     promise.resolve(granted);
                 }
+                // Gaining USB permission makes the device accessible to getPorts(),
+                // so surface it like an attach: emit "connect" with the device's
+                // identifiers. This lets JS auto-refresh once permission is granted
+                // (e.g. after a re-attach, where Android revokes prior permission).
+                if (granted) {
+                    UsbDevice device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
+                    if (device != null) {
+                        WritableMap event = Arguments.createMap();
+                        event.putInt("deviceId", device.getDeviceId());
+                        event.putInt("usbVendorId", device.getVendorId());
+                        event.putInt("usbProductId", device.getProductId());
+                        sendEvent("connect", event);
+                    }
+                }
             }
         }
     };

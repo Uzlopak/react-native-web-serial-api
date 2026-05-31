@@ -1,12 +1,29 @@
 import React from 'react';
-import {FlatList, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
+import {
+  AppState,
+  FlatList,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import type {SerialPort} from 'react-native-web-serial-api';
-import {serial} from 'react-native-web-serial-api';
+import {serial, UsbSerial} from 'react-native-web-serial-api';
 import {AppBar} from '../components/AppBar';
 import {colors} from '../theme';
 
 type Props = {
   onSelect: (port: SerialPort) => void;
+};
+
+// One row in the device list: a probed USB-serial port, which may or may not be
+// accessible yet (Android USB permission).
+type DeviceRow = {
+  deviceId: number;
+  portNumber: number;
+  usbVendorId: number;
+  usbProductId: number;
+  hasPermission: boolean;
 };
 
 function hex4(n: number | undefined): string {
@@ -30,18 +47,48 @@ function chipLabel(vendorId: number | undefined): string {
   }
 }
 
+// Native (Android) gives us every probed port plus its permission state, so we
+// can show plugged-in-but-unpermitted devices too. On web that lower-level
+// module is unavailable; fall back to serial.getPorts() (already permitted).
+function nativeUsb() {
+  try {
+    return UsbSerial.getUsbSerial();
+  } catch {
+    return null;
+  }
+}
+
 export function DevicesScreen({onSelect}: Props) {
-  const [ports, setPorts] = React.useState<SerialPort[]>([]);
+  const [rows, setRows] = React.useState<DeviceRow[]>([]);
   const [error, setError] = React.useState<string | null>(null);
 
   const refresh = React.useCallback(async () => {
     setError(null);
     try {
+      const usb = nativeUsb();
+      if (usb) {
+        // Full enumeration incl. unpermitted devices.
+        setRows((await usb.findAllDrivers()) as DeviceRow[]);
+        return;
+      }
       if (!serial) {
         setError('Web Serial API is not available on this platform.');
         return;
       }
-      setPorts(await serial.getPorts());
+      // Web: only already-granted ports are visible; all are permitted.
+      const ports = await serial.getPorts();
+      setRows(
+        ports.map(p => {
+          const info = p.getInfo();
+          return {
+            deviceId: -1,
+            portNumber: 0,
+            usbVendorId: info.usbVendorId ?? 0,
+            usbProductId: info.usbProductId ?? 0,
+            hasPermission: true,
+          };
+        }),
+      );
     } catch (e: any) {
       setError(e?.message ?? String(e));
     }
@@ -52,14 +99,58 @@ export function DevicesScreen({onSelect}: Props) {
     if (!serial) {
       return;
     }
-    // Auto-refresh the list when a USB device is attached or detached, so the
-    // user doesn't have to hit "Refresh Devices" manually.
+    // Auto-refresh on attach, detach, AND permission-grant (the library emits
+    // "connect" for all three), so the list stays current without manual taps.
     serial.addEventListener('connect', refresh);
     serial.addEventListener('disconnect', refresh);
     return () => {
       serial.removeEventListener('connect', refresh);
       serial.removeEventListener('disconnect', refresh);
     };
+  }, [refresh]);
+
+  // Resolve the SerialPort for an already-permitted row and proceed.
+  const openPermitted = React.useCallback(
+    async (row: DeviceRow) => {
+      setError(null);
+      try {
+        const ports = await serial.getPorts();
+        const match =
+          ports.find(p => {
+            const info = p.getInfo();
+            return (
+              info.usbVendorId === row.usbVendorId &&
+              info.usbProductId === row.usbProductId
+            );
+          }) ?? ports[0];
+        if (match) {
+          onSelect(match);
+        } else {
+          setError('Device is no longer available.');
+        }
+      } catch (e: any) {
+        setError(e?.message ?? String(e));
+      }
+    },
+    [onSelect],
+  );
+
+  // Tap on an unpermitted row: request Android USB permission. On grant, the
+  // library emits "connect" -> refresh() runs -> the row becomes permitted.
+  const grantPermission = React.useCallback(async (row: DeviceRow) => {
+    setError(null);
+    const usb = nativeUsb();
+    if (!usb) {
+      return;
+    }
+    try {
+      await usb.requestPermission(row.deviceId);
+    } catch (e: any) {
+      setError(e?.message ?? String(e));
+    } finally {
+      // Always refresh after permission attempt (fixes stale state)
+      refresh(); 
+    }
   }, [refresh]);
 
   const requestNew = React.useCallback(async () => {
@@ -72,6 +163,19 @@ export function DevicesScreen({onSelect}: Props) {
       setError(e?.message ?? String(e));
     }
   }, [onSelect]);
+
+  // Refresh device list when app returns to foreground (covers system dialog grants)
+  React.useEffect(() => {
+    const handleAppStateChange = (state: string) => {
+      if (state === 'active') {
+        refresh();
+      }
+    };
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+    return () => {
+      subscription.remove();
+    };
+  }, [refresh]);
 
   return (
     <View style={styles.container}>
@@ -90,32 +194,28 @@ export function DevicesScreen({onSelect}: Props) {
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
       <FlatList
-        data={ports}
-        keyExtractor={(_, i) => String(i)}
+        data={rows}
+        keyExtractor={(r, i) => `${r.deviceId}:${r.portNumber}:${i}`}
         ListEmptyComponent={
-          <View>
-            <Text style={styles.empty}>{'<no USB devices found>'}</Text>
-            <Text style={styles.emptyHint}>
-              Only devices this app already has USB permission for are listed.
-              {'\n'}Use “Connect new device…” to grant access to a device.
-            </Text>
-          </View>
+          <Text style={styles.empty}>{'<no USB devices found>'}</Text>
         }
-        renderItem={({item}) => {
-          const info = item.getInfo();
-          return (
-            <TouchableOpacity
-              style={styles.item}
-              onPress={() => onSelect(item)}>
-              <Text style={styles.text1}>{chipLabel(info.usbVendorId)}</Text>
-              <Text style={styles.text2}>
-                {`Vendor ${hex4(info.usbVendorId)}, Product ${hex4(
-                  info.usbProductId,
-                )}`}
-              </Text>
-            </TouchableOpacity>
-          );
-        }}
+        renderItem={({item}) => (
+          <TouchableOpacity
+            style={styles.item}
+            onPress={() =>
+              item.hasPermission ? openPermitted(item) : grantPermission(item)
+            }>
+            <Text style={[styles.text1, !item.hasPermission && styles.dimmed]}>
+              {chipLabel(item.usbVendorId)}
+              {item.hasPermission ? '' : '  🔒 tap to allow'}
+            </Text>
+            <Text style={[styles.text2, !item.hasPermission && styles.dimmed]}>
+              {`Vendor ${hex4(item.usbVendorId)}, Product ${hex4(
+                item.usbProductId,
+              )}`}
+            </Text>
+          </TouchableOpacity>
+        )}
       />
     </View>
   );
@@ -136,13 +236,6 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     marginTop: 24,
   },
-  emptyHint: {
-    fontSize: 13,
-    textAlign: 'center',
-    color: colors.textSecondary,
-    marginTop: 12,
-    paddingHorizontal: 24,
-  },
   item: {paddingVertical: 8, paddingHorizontal: 12},
   text1: {fontSize: 16, color: colors.text, marginTop: 4, marginHorizontal: 12},
   text2: {
@@ -151,4 +244,5 @@ const styles = StyleSheet.create({
     marginHorizontal: 20,
     marginBottom: 4,
   },
+  dimmed: {opacity: 0.5},
 });
