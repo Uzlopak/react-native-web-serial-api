@@ -1,0 +1,78 @@
+{
+  "name": "react-native-web-serial-api",
+  "version": "0.0.1",
+  "description": "W3C Web Serial API (navigator.serial) for React Native on Android, backed by a USB-serial TurboModule (built on mik3y/usb-serial-for-android).",
+  "main": "lib/commonjs/index.js",
+  "react-native": "lib/commonjs/index.js",
+  "source": "src/index.ts",
+  "types": "lib/typescript/src/index.d.ts",
+  "scripts": {
+    "prepare": "bob build",
+    "clean": "node -e \"require('fs').rm(\\\"./lib\\\", { recursive: true }, () => {console.log(\\\"'lib' folder deleted\\\")})\"",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check src",
+    "format": "biome check --write src"
+  },
+  "keywords": [
+    "react-native",
+    "android",
+    "web-serial",
+    "web serial api",
+    "serial",
+    "usb",
+    "usb-serial",
+    "turbomodule",
+    "navigator.serial",
+    "ftdi",
+    "cp210x",
+    "ch340",
+    "pl2303",
+    "cdc-acm"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/uzlopak/react-native-web-serial-api.git"
+  },
+  "author": "Aras Abbasi <arasabbasi@gmail.com>",
+  "license": "MIT",
+  "codegenConfig": {
+    "name": "WebSerialApiSpec",
+    "type": "modules",
+    "jsSrcsDir": "src",
+    "android": {
+      "javaPackageName": "dev.webserialapi"
+    }
+  },
+  "dependencies": {
+    "web-streams-polyfill": "^4.3.0"
+  },
+  "peerDependencies": {
+    "react": "*",
+    "react-native": "*"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.16",
+    "@react-native/babel-preset": "0.85.3",
+    "@types/react": "^19.2.6",
+    "react": "19.2.3",
+    "react-native": "0.85.3",
+    "react-native-builder-bob": "^0.41.0",
+    "typescript": "6.0.3"
+  },
+  "react-native-builder-bob": {
+    "source": "src",
+    "output": "lib",
+    "targets": [
+      "commonjs",
+      [
+        "typescript",
+        {
+          "project": "tsconfig.build.json"
+        }
+      ]
+    ]
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

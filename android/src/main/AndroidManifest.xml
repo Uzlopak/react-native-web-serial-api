@@ -1,0 +1,21 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-feature android:name="android.hardware.usb.host" />
+
+    <application>
+        <!-- Native dialog shown by serial.requestPort() to let the user pick a port -->
+        <activity
+            android:name="dev.webserialapi.PortPickerActivity"
+            android:exported="false"
+            android:theme="@style/Theme.AppCompat.Dialog" />
+
+        <!-- Emits a "disconnect" JS event when a USB serial device is unplugged -->
+        <receiver
+            android:name="dev.webserialapi.UsbDetachReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_DETACHED" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

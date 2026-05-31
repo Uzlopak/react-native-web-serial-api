@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- CDC ACM (Arduino, etc.) -->
+    <usb-device class="2" subclass="2" protocol="1" />
+    <!-- FTDI -->
+    <usb-device vendor-id="0x0403" />
+    <!-- CP210x -->
+    <usb-device vendor-id="0x10C4" />
+    <!-- CH340/CH341 -->
+    <usb-device vendor-id="0x1A86" />
+    <!-- Prolific PL2303 -->
+    <usb-device vendor-id="0x067B" />
+</resources>

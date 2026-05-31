@@ -1,0 +1,62 @@
+buildscript {
+  // Allow the library to be built either standalone (using the *_ defaults from
+  // gradle.properties) or as part of a host app (using the host's rootProject.ext).
+  ext.getExtOrDefault = { name ->
+    return rootProject.ext.has(name) ? rootProject.ext.get(name) : project.properties["WebSerialApi_" + name]
+  }
+
+  // When autolinked into a host app, the Android Gradle Plugin is already on the
+  // root project's buildscript classpath, so we must not redeclare it here. Only
+  // pull it in (with an explicit version) when building this library standalone.
+  def agpVersion = rootProject.ext.has("agpVersion") ? rootProject.ext.get("agpVersion") : "8.7.2"
+
+  repositories {
+    google()
+    mavenCentral()
+  }
+
+  dependencies {
+    if (project == rootProject) {
+      classpath "com.android.tools.build:gradle:$agpVersion"
+    }
+  }
+}
+
+apply plugin: "com.android.library"
+// Drives React Native Codegen for the TurboModule spec declared in package.json -> codegenConfig
+apply plugin: "com.facebook.react"
+
+def getExtOrIntegerDefault(name) {
+  return rootProject.ext.has(name) ? rootProject.ext.get(name) : (project.properties["WebSerialApi_" + name]).toInteger()
+}
+
+android {
+  namespace "dev.webserialapi"
+
+  compileSdkVersion getExtOrIntegerDefault("compileSdkVersion")
+
+  defaultConfig {
+    minSdkVersion getExtOrIntegerDefault("minSdkVersion")
+    targetSdkVersion getExtOrIntegerDefault("targetSdkVersion")
+  }
+
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_17
+    targetCompatibility JavaVersion.VERSION_17
+  }
+}
+
+repositories {
+  mavenCentral()
+  google()
+  // usb-serial-for-android is published on JitPack
+  maven { url "https://jitpack.io" }
+}
+
+dependencies {
+  // The version of react-native is set by the host app's React Native Gradle Plugin
+  implementation "com.facebook.react:react-android"
+  implementation "com.github.mik3y:usb-serial-for-android:3.10.0"
+  // PortPickerActivity extends AppCompatActivity and uses the AppCompat dialog theme
+  implementation "androidx.appcompat:appcompat:1.7.0"
+}

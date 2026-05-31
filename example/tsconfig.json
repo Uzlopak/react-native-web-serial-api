@@ -1,0 +1,10 @@
+{
+  "extends": "@react-native/typescript-config",
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM"],
+    "paths": {
+      "react-native-web-serial-api": ["../src/index"]
+    }
+  },
+  "include": ["App.tsx", "index.js", "index.web.js", "src", "__tests__"]
+}
