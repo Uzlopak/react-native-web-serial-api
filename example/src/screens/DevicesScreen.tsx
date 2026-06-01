@@ -7,12 +7,24 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import type {SerialPort} from 'react-native-web-serial-api';
-import {serial, UsbSerial} from 'react-native-web-serial-api';
+import type {
+  Serial,
+  SerialPort,
+  SerialTransport,
+} from 'react-native-web-serial-api';
 import {AppBar} from '../components/AppBar';
 import {colors} from '../theme';
 
 type Props = {
+  // The active Web Serial entry point: the platform `serial` in real mode, or a
+  // VirtualSerialTransport-backed Serial in demo mode.
+  serial: Serial;
+  // Low-level enumerator (lists unpermitted devices too). Native USB on Android,
+  // the virtual transport in demo mode, or null on web (fall back to getPorts).
+  transport: SerialTransport | null;
+  demoMode: boolean;
+  onToggleDemo: () => void;
+  onOpenSelfTest: () => void;
   onSelect: (port: SerialPort) => void;
 };
 
@@ -47,28 +59,24 @@ function chipLabel(vendorId: number | undefined): string {
   }
 }
 
-// Native (Android) gives us every probed port plus its permission state, so we
-// can show plugged-in-but-unpermitted devices too. On web that lower-level
-// module is unavailable; fall back to serial.getPorts() (already permitted).
-function nativeUsb() {
-  try {
-    return UsbSerial.getUsbSerial();
-  } catch {
-    return null;
-  }
-}
-
-export function DevicesScreen({onSelect}: Props) {
+export function DevicesScreen({
+  serial,
+  transport,
+  demoMode,
+  onToggleDemo,
+  onOpenSelfTest,
+  onSelect,
+}: Props) {
   const [rows, setRows] = React.useState<DeviceRow[]>([]);
   const [error, setError] = React.useState<string | null>(null);
 
   const refresh = React.useCallback(async () => {
     setError(null);
     try {
-      const usb = nativeUsb();
-      if (usb) {
-        // Full enumeration incl. unpermitted devices.
-        setRows((await usb.findAllDrivers()) as DeviceRow[]);
+      // Native (Android) / virtual transport gives us every probed port plus its
+      // permission state, so we can show plugged-in-but-unpermitted devices too.
+      if (transport) {
+        setRows((await transport.findAllDrivers()) as DeviceRow[]);
         return;
       }
       if (!serial) {
@@ -92,7 +100,7 @@ export function DevicesScreen({onSelect}: Props) {
     } catch (e: any) {
       setError(e?.message ?? String(e));
     }
-  }, []);
+  }, [serial, transport]);
 
   React.useEffect(() => {
     refresh();
@@ -107,7 +115,7 @@ export function DevicesScreen({onSelect}: Props) {
       serial.removeEventListener('connect', refresh);
       serial.removeEventListener('disconnect', refresh);
     };
-  }, [refresh]);
+  }, [serial, refresh]);
 
   // Resolve the SerialPort for an already-permitted row and proceed.
   const openPermitted = React.useCallback(
@@ -132,26 +140,24 @@ export function DevicesScreen({onSelect}: Props) {
         setError(e?.message ?? String(e));
       }
     },
-    [onSelect],
+    [serial, onSelect],
   );
 
-  // Tap on an unpermitted row: request Android USB permission. On grant, 
-  // refresh immediately.
+  // Tap on an unpermitted row: request USB permission. On grant, refresh.
   const grantPermission = React.useCallback(
     async (row: DeviceRow) => {
       setError(null);
-      const usb = nativeUsb();
-      if (!usb) {
+      if (!transport) {
         return;
       }
       try {
-        await usb.requestPermission(row.deviceId);
+        await transport.requestPermission(row.deviceId);
       } catch (e: any) {
         setError(e?.message ?? String(e));
       }
       refresh();
     },
-    [refresh],
+    [transport, refresh],
   );
 
   const requestNew = React.useCallback(async () => {
@@ -163,7 +169,7 @@ export function DevicesScreen({onSelect}: Props) {
       // user cancelled the picker, or no device
       setError(e?.message ?? String(e));
     }
-  }, [onSelect]);
+  }, [serial, onSelect]);
 
   // Refresh device list when app returns to foreground (covers system dialog grants)
   React.useEffect(() => {
@@ -188,12 +194,26 @@ export function DevicesScreen({onSelect}: Props) {
         menu={[
           {key: 'refresh', title: 'Refresh Devices', onPress: refresh},
           {key: 'request', title: 'Connect new device…', onPress: requestNew},
+          {
+            key: 'demo',
+            title: 'Virtual device (demo)',
+            checkable: true,
+            checked: demoMode,
+            onPress: onToggleDemo,
+          },
+          {key: 'selftest', title: 'Self test…', onPress: onOpenSelfTest},
         ]}
       />
 
       <View style={styles.header}>
         <Text style={styles.headerText}>USB Devices</Text>
       </View>
+
+      {demoMode ? (
+        <Text style={styles.demoBanner}>
+          Virtual device mode — no hardware required
+        </Text>
+      ) : null}
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
@@ -233,6 +253,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   headerText: {fontSize: 16, color: colors.text},
+  demoBanner: {
+    backgroundColor: colors.accent,
+    color: colors.onPrimary,
+    textAlign: 'center',
+    paddingVertical: 6,
+    fontSize: 13,
+  },
   error: {color: '#c62828', padding: 12},
   empty: {
     fontSize: 18,

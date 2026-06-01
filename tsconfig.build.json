@@ -3,5 +3,5 @@
   "compilerOptions": {
     "noEmit": false
   },
-  "exclude": ["example", "lib", "node_modules"]
+  "exclude": ["example", "lib", "node_modules", "src/__tests__", "**/*.test.ts"]
 }

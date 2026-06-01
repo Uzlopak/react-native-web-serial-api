@@ -1,4 +1,3 @@
-
 export interface EventInit {
   bubbles?: boolean;
   cancelable?: boolean;
@@ -66,7 +65,7 @@ export class Event {
   }
 }
 
-type Mutable<T> = { -readonly [P in keyof T]: T[P] };
+type Mutable<T> = {-readonly [P in keyof T]: T[P]};
 
 type EventListener = (event: Event) => void;
 
@@ -77,7 +76,7 @@ interface EventListenerObject {
 type EventListenerOrEventListenerObject = EventListener | EventListenerObject;
 
 type ListenerOptions =
-  | { once?: boolean; capture?: boolean; passive?: boolean }
+  | {once?: boolean; capture?: boolean; passive?: boolean}
   | boolean
   | undefined;
 
@@ -91,7 +90,11 @@ type SecretMap = Record<string, ListenerInfo[]>;
 
 const wm = new WeakMap<object, SecretMap>();
 
-function define<T extends object>(target: T, name: string, value: unknown): void {
+function define<T extends object>(
+  target: T,
+  name: string,
+  value: unknown,
+): void {
   Object.defineProperty(target, name, {
     configurable: true,
     writable: true,
@@ -102,13 +105,13 @@ function define<T extends object>(target: T, name: string, value: unknown): void
 function dispatch(this: Event, info: ListenerInfo): boolean {
   const options = info.options;
   const once =
-    typeof options === "object" && options !== null ? options.once : false;
+    typeof options === 'object' && options !== null ? options.once : false;
 
   if (once) {
     info.target.removeEventListener(this.type, info.listener);
   }
 
-  if (typeof info.listener === "function") {
+  if (typeof info.listener === 'function') {
     info.listener.call(info.target, this);
   } else {
     info.listener.handleEvent(this);
@@ -125,16 +128,20 @@ export class EventTarget {
   addEventListener(
     type: string,
     listener: EventListenerOrEventListenerObject,
-    options?: ListenerOptions
+    options?: ListenerOptions,
   ): void {
     const secret = wm.get(this)!;
-    const listeners: ListenerInfo[] = secret[type] ?? (secret[type] = []);
+    let listeners = secret[type];
+    if (!listeners) {
+      listeners = [];
+      secret[type] = listeners;
+    }
 
     for (let i = 0; i < listeners.length; i++) {
       if (listeners[i].listener === listener) return;
     }
 
-    listeners.push({ target: this, listener, options });
+    listeners.push({target: this, listener, options});
   }
 
   dispatchEvent(event: Event): boolean {
@@ -142,11 +149,11 @@ export class EventTarget {
     const listeners = secret[event.type];
 
     if (listeners) {
-      define(event, "target", this);
-      define(event, "currentTarget", this);
+      define(event, 'target', this);
+      define(event, 'currentTarget', this);
       listeners.slice(0).some(dispatch, event);
-      define(event, "target", null);
-      define(event, "currentTarget", null);
+      define(event, 'target', null);
+      define(event, 'currentTarget', null);
     }
 
     return true;
@@ -155,10 +162,11 @@ export class EventTarget {
   removeEventListener(
     type: string,
     listener: EventListenerOrEventListenerObject,
-    _options?: ListenerOptions
+    _options?: ListenerOptions,
   ): void {
     const secret = wm.get(this)!;
-    const listeners: ListenerInfo[] = secret[type] ?? (secret[type] = []);
+    const listeners = secret[type];
+    if (!listeners) return;
 
     for (let i = 0; i < listeners.length; i++) {
       if (listeners[i].listener === listener) {

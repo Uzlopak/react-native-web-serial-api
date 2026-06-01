@@ -12,8 +12,8 @@ import type {
   ErrorEvent,
   OpenOptions,
   PortId,
-  UsbSerialModule,
-} from './UsbSerial';
+  SerialTransport,
+} from './transport';
 import {getUsbSerial} from './UsbSerial';
 
 /**
@@ -239,7 +239,7 @@ export class SerialPort extends EventTarget {
   #pendingClosePromise: ReturnType<typeof createDeferredPromise<void>> | null =
     null; // [[pendingClosePromise]] = null
 
-  #usb: UsbSerialModule;
+  #usb: SerialTransport;
   #deviceId: number;
   #portNumber: number;
   #usbVendorId?: number;
@@ -256,7 +256,7 @@ export class SerialPort extends EventTarget {
   #errorSubscription: {remove: () => void} | null = null;
 
   constructor(
-    usb: UsbSerialModule,
+    usb: SerialTransport,
     deviceId: number,
     portNumber: number,
     usbVendorId: number,
@@ -860,9 +860,23 @@ export class Serial extends EventTarget {
     disconnect: null as ((event: Event) => void) | null,
   };
 
-  #usb: UsbSerialModule | null = null;
+  #usb: SerialTransport | null = null;
   #knownPorts: Map<string, SerialPort> = new Map();
   #initialized = false;
+  #injected: SerialTransport | null;
+
+  /**
+   * @param transport Optional transport override. When provided, this `Serial`
+   * talks to it instead of the global native module — the seam used by tests
+   * and the virtual-device harness (`new Serial(new VirtualSerialTransport())`).
+   * Omit it for the normal native-backed instance; the singleton `serial`
+   * export is created this way and can still be redirected globally via
+   * `setUsbSerial()`.
+   */
+  constructor(transport?: SerialTransport) {
+    super();
+    this.#injected = transport ?? null;
+  }
 
   /**
    * Subscribing to "connect"/"disconnect" must wire up the native USB state
@@ -880,11 +894,11 @@ export class Serial extends EventTarget {
    * Deferring native access out of the module-import path avoids touching the
    * TurboModule before the runtime is ready.
    */
-  #ensureInit(): UsbSerialModule | null {
+  #ensureInit(): SerialTransport | null {
     if (this.#initialized) return this.#usb;
     this.#initialized = true;
     try {
-      this.#usb = getUsbSerial();
+      this.#usb = this.#injected ?? getUsbSerial();
 
       // A USB device was attached. Android assigns a NEW deviceId on every
       // attach, so match previously-known ports of the same physical device by

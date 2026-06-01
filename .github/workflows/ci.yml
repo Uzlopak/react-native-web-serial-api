@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  library:
+    name: Library (typecheck · lint · test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      # --ignore-scripts skips the `prepare` (bob) build; the build is validated
+      # in its own job below. The test suite needs no native build.
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+
+  example:
+    name: Example (typecheck · test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm ci --ignore-scripts --prefix example
+      - name: Typecheck example
+        working-directory: example
+        run: npx tsc --noEmit
+      - run: npm test --prefix example
+
+  build:
+    name: Build (bob + testing subpath)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run prepare
+      # Assert the `react-native-web-serial-api/testing` subpath actually ships.
+      - name: Verify testing subpath build output
+        run: |
+          test -f lib/commonjs/testing/index.js
+          test -f lib/typescript/src/testing/index.d.ts
+          test -f lib/typescript/src/transport.d.ts

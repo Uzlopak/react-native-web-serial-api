@@ -192,6 +192,21 @@ npm run web          # dev server at http://localhost:5173
 
 The JavaScript layer (`src/`) implements the Web Serial API on top of a thin TurboModule (`NativeUsbSerial`) whose native Android implementation (`android/src/main/java/dev/webserialapi/`) wraps `usb-serial-for-android`. Reads/writes are bridged to `ReadableStream`/`WritableStream` via [`web-streams-polyfill`](https://github.com/MattiasBuelens/web-streams-polyfill).
 
+## Testing
+
+The hardware layer sits behind a single injectable `SerialTransport` interface, so you can test against a pure-JS **virtual serial device** instead of real USB hardware — in Jest *and* live on a device/emulator/browser. The same conformance suite runs in both places, and the example app has a **Self Test** screen plus a **Virtual device (demo)** mode.
+
+```ts
+import {Serial} from 'react-native-web-serial-api';
+import {VirtualSerialTransport} from 'react-native-web-serial-api/testing';
+
+const transport = new VirtualSerialTransport();
+transport.addDevice({usbVendorId: 0x0403, usbProductId: 0x6001, hasPermission: true});
+const serial = new Serial(transport); // no native module, no hardware
+```
+
+See **[TESTING.md](TESTING.md)** for the full guide.
+
 ## License
 
 MIT © Aras Abbasi

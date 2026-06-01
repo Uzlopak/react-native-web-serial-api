@@ -39,6 +39,16 @@ export default defineConfig({
   resolve: {
     extensions,
     alias: [
+      // The `/testing` subpath (virtual transport + conformance suite), matched
+      // before the bare-name alias below.
+      {
+        find: new RegExp(`^${rootPkg.name}/testing$`),
+        replacement: path.resolve(
+          import.meta.dirname,
+          '..',
+          'src/testing/index.ts',
+        ),
+      },
       // Consume the library straight from its TypeScript source (live reload)
       {
         find: new RegExp(`^${rootPkg.name}$`),

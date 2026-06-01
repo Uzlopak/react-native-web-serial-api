@@ -1,12 +1,5 @@
 import React from 'react';
-import {
-  Platform,
-  StatusBar,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import {StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {colors} from '../theme';
 import {Menu, type MenuItem} from './Menu';
 
@@ -15,9 +8,6 @@ type Props = {
   onBack?: () => void;
   menu?: MenuItem[];
 };
-
-const statusBarHeight =
-  Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0;
 
 export function AppBar({title, onBack, menu}: Props) {
   const [open, setOpen] = React.useState(false);
@@ -49,7 +39,7 @@ export function AppBar({title, onBack, menu}: Props) {
 }
 
 const styles = StyleSheet.create({
-  wrap: {backgroundColor: colors.primary, paddingTop: statusBarHeight},
+  wrap: {backgroundColor: colors.primary},
   bar: {
     height: 56,
     flexDirection: 'row',

@@ -13,6 +13,16 @@ module.exports = {
       {
         extensions: ['.tsx', '.ts', '.js', '.json'],
         alias: {
+          // The `/testing` subpath must come first: module-resolver matches
+          // alias keys as prefixes, so the bare-name entry would otherwise
+          // capture `<pkg>/testing` and append the subpath to src/index.ts.
+          [`${pkg.name}/testing`]: path.join(
+            __dirname,
+            '..',
+            'src',
+            'testing',
+            'index.ts',
+          ),
           [pkg.name]: path.join(__dirname, '..', pkg.source),
         },
       },

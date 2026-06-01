@@ -2,6 +2,13 @@
 // On React Native (Android) this is the USB-serial-backed polyfill; on web it
 // is the browser's native navigator.serial. (See serial.android.ts / serial.web.ts)
 export {default as serial} from './serial';
+// Transport seam (advanced). Implement `SerialTransport` to back the polyfill
+// with something other than real hardware, then inject it via `new
+// Serial(transport)` or globally with `setUsbSerial(transport)`. The ready-made
+// in-memory double + conformance suite live in the `react-native-web-serial-api/testing`
+// subpath so they stay out of the main bundle.
+export type {SerialTransport} from './transport';
+export {resetUsbSerial, setUsbSerial} from './UsbSerial';
 export type {
   SerialInputSignals,
   SerialOptions,

@@ -1,92 +1,39 @@
 import {NativeEventEmitter, NativeModules} from 'react-native';
 import NativeUsbSerial from './NativeUsbSerial';
+import type {
+  ConnectEvent,
+  ControlLine,
+  DataEvent,
+  ErrorEvent,
+  FlowControl,
+  OpenOptions,
+  PortFilter,
+  PortId,
+  PortPickerLabels,
+  SerialTransport,
+  Subscription,
+} from './transport';
+import {DEFAULT_OPEN_OPTIONS} from './transport';
 
-export type ControlLine = 'RTS' | 'CTS' | 'DTR' | 'DSR' | 'CD' | 'RI';
-export type FlowControl =
-  | 'NONE'
-  | 'RTS_CTS'
-  | 'DTR_DSR'
-  | 'XON_XOFF'
-  | 'XON_XOFF_INLINE';
+// These types and enums were originally declared in this module and form part
+// of the public `UsbSerial` namespace. They now live in ./transport (a
+// react-native-free module the virtual transport also builds on) and are
+// re-exported here unchanged for backwards compatibility.
+export type {
+  ConnectEvent,
+  ControlLine,
+  DataEvent,
+  ErrorEvent,
+  FlowControl,
+  OpenOptions,
+  PortFilter,
+  PortId,
+  PortPickerLabels,
+  SerialTransport,
+} from './transport';
+export {DataBits, Parity, StopBits} from './transport';
 
-export type PortFilter = {
-  usbVendorId?: number;
-  usbProductId?: number;
-};
-
-export type PortPickerLabels = {
-  titleSelectPort?: string;
-  titleNoPortsAvailable?: string;
-  messageNoPortsAvailable?: string;
-};
-
-export type PortId = {
-  deviceId: number;
-  portNumber: number;
-  usbVendorId: number;
-  usbProductId: number;
-  /**
-   * Whether the app currently holds Android USB permission to access this
-   * device (via the system attach dialog or a prior permission request).
-   */
-  hasPermission: boolean;
-};
-
-export type DataEvent = {
-  deviceId: number;
-  portNumber: number;
-  data: number[];
-};
-
-export type ErrorEvent = {
-  deviceId: number;
-  portNumber: number;
-  error: string;
-};
-
-export type ConnectEvent = {
-  deviceId: number;
-  usbVendorId: number;
-  usbProductId: number;
-};
-
-export const Parity = {
-  NONE: 0,
-  ODD: 1,
-  EVEN: 2,
-  MARK: 3,
-  SPACE: 4,
-} as const;
-
-export const DataBits = {
-  FIVE: 5,
-  SIX: 6,
-  SEVEN: 7,
-  EIGHT: 8,
-} as const;
-
-export const StopBits = {
-  ONE: 1,
-  ONE_FIVE: 3,
-  TWO: 2,
-} as const;
-
-export type OpenOptions = {
-  baudRate: number;
-  dataBits?: number;
-  stopBits?: number;
-  parity?: number;
-};
-
-const DEFAULT_OPEN_OPTIONS: Required<Omit<OpenOptions, 'baudRate'>> = {
-  dataBits: DataBits.EIGHT,
-  stopBits: StopBits.ONE,
-  parity: Parity.NONE,
-};
-
-type Subscription = {remove: () => void};
-
-export class UsbSerialModule {
+export class UsbSerialModule implements SerialTransport {
   private readonly native: NonNullable<typeof NativeUsbSerial>;
   private readonly emitter: NativeEventEmitter;
 
@@ -300,11 +247,39 @@ export class UsbSerialModule {
   }
 }
 
-let instance: UsbSerialModule | null = null;
+let instance: SerialTransport | null = null;
+let override: SerialTransport | null = null;
 
-export function getUsbSerial(): UsbSerialModule {
+/**
+ * Resolve the active serial transport. Returns the override set via
+ * {@link setUsbSerial} if present (used by tests and by the example's on-device
+ * "virtual device" mode); otherwise lazily constructs the real native-backed
+ * {@link UsbSerialModule}.
+ */
+export function getUsbSerial(): SerialTransport {
+  if (override) return override;
   if (!instance) {
     instance = new UsbSerialModule();
   }
   return instance;
+}
+
+/**
+ * Override the transport returned by {@link getUsbSerial}. Pass a
+ * {@link SerialTransport} (e.g. a `VirtualSerialTransport`) to make the
+ * singleton `serial` instance — and any `new Serial()` created without an
+ * explicit transport — talk to it instead of real hardware. Pass `null` to
+ * clear the override.
+ *
+ * Inject before the first `getPorts()` / `requestPort()` / `addEventListener()`
+ * call so the lazy initialisation in `Serial` picks it up.
+ */
+export function setUsbSerial(transport: SerialTransport | null): void {
+  override = transport;
+}
+
+/** Clear any override and drop the cached native instance (test teardown). */
+export function resetUsbSerial(): void {
+  override = null;
+  instance = null;
 }

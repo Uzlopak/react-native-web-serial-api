@@ -11,9 +11,9 @@ export function createDeferredPromise<T>(): DeferredPromise<T> {
   let res: any;
   let rej: any;
   const promise = new Promise<T>((resolve, reject) => {
-    res = resolve
-    rej = reject
-  })
+    res = resolve;
+    rej = reject;
+  });
 
-  return { promise, resolve: res, reject: rej } as DeferredPromise<T>;
+  return {promise, resolve: res, reject: rej} as DeferredPromise<T>;
 }
