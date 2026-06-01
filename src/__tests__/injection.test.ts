@@ -3,6 +3,7 @@
  * `Serial`'s constructor injection, plus their precedence.
  */
 import {afterEach, expect, it} from '@jest/globals';
+import {EchoDevice} from '../testing/serial-device';
 import {VirtualSerialTransport} from '../testing/virtual-serial';
 import {getUsbSerial, resetUsbSerial, setUsbSerial} from '../UsbSerial';
 import {Serial} from '../WebSerial';
@@ -19,9 +20,7 @@ it('getUsbSerial() returns the override set via setUsbSerial()', () => {
 
 it('a Serial() with no explicit transport honours the global override', async () => {
   const fake = new VirtualSerialTransport();
-  fake.addDevice({
-    usbVendorId: 0x0403,
-    usbProductId: 0x6001,
+  fake.addDevice(new EchoDevice({usbVendorId: 0x0403, usbProductId: 0x6001}), {
     hasPermission: true,
   });
   setUsbSerial(fake);
@@ -39,7 +38,9 @@ it('resetUsbSerial() clears the override', () => {
 
 it('an explicit transport takes precedence over the global override', async () => {
   const explicit = new VirtualSerialTransport();
-  explicit.addDevice({usbVendorId: 1, usbProductId: 1, hasPermission: true});
+  explicit.addDevice(new EchoDevice({usbVendorId: 1, usbProductId: 1}), {
+    hasPermission: true,
+  });
 
   const globalEmpty = new VirtualSerialTransport();
   setUsbSerial(globalEmpty);

@@ -47,42 +47,29 @@ subpath, so they stay out of your production bundle.
 
 ## VirtualSerialTransport
 
-An in-memory transport backing one or more simulated devices.
+An in-memory transport backing one or more simulated devices. You register a
+[`SerialDevice`](#simulating-a-whole-device-serialdevice) and the transport
+reads its USB identity; `options` carries the transport-side knobs.
 
 ```ts
-import {VirtualSerialTransport} from 'react-native-web-serial-api/testing';
+import {VirtualSerialTransport, EchoDevice} from 'react-native-web-serial-api/testing';
 
 const transport = new VirtualSerialTransport({
   latencyMs: 0,            // 0 = resolve on a microtask (deterministic for Jest)
   autoGrantPermission: true,
 });
 
-const device = transport.addDevice({
-  usbVendorId: 0x0403,
-  usbProductId: 0x6001,
-  serialNumber: 'DEMO-1',
-  hasPermission: true,     // false → hidden from getPorts() until requestPort()
-  behavior: 'echo',        // 'echo' | 'silent' | (data, ctx) => reply bytes
-  loopbackSignals: true,   // DTR→DSR+DCD, RTS→CTS, so getSignals reflects setSignals
-});
+const device = transport.addDevice(
+  new EchoDevice({usbVendorId: 0x0403, usbProductId: 0x6001, serialNumber: 'DEMO-1'}),
+  {
+    hasPermission: true,   // false → hidden from getPorts() until requestPort()
+    loopbackSignals: true, // DTR→DSR+DCD, RTS→CTS, so getSignals reflects setSignals
+  },
+);
 ```
 
-### Device behaviors
-
-| behavior        | effect                                                        |
-| --------------- | ------------------------------------------------------------- |
-| `'echo'`        | every byte written is sent straight back (default)            |
-| `'silent'`      | writes are accepted but nothing is sent back                  |
-| responder `fn`  | `(data, ctx) => number[] \| Uint8Array \| frames \| undefined` |
-
-```ts
-// Model a real protocol with a responder:
-transport.addDevice({
-  usbVendorId: 0x10c4,
-  usbProductId: 0xea60,
-  behavior: data => (data[0] === 0x3f ? [0x21] : undefined), // '?' -> '!'
-});
-```
+`EchoDevice` (loopback) and `SilentDevice` (accepts writes, sends nothing) are
+built in; for anything richer, write a `SerialDevice` (next section).
 
 ### Driving a device from a test/UI
 
@@ -98,6 +85,49 @@ device.written;                   // number[][] — everything the host wrote
 
 `transport.selectNextPort(device)` / `transport.rejectNextPortPicker()` script
 what the next `requestPort()` returns.
+
+---
+
+## Simulating a whole device (`SerialDevice`)
+
+To model a *whole* peripheral — a stateful protocol that greets on open, streams
+over time, reacts to control signals, and raises typed errors — extend
+**`SerialDevice`** and override the lifecycle hooks:
+
+```ts
+import {SerialDevice, VirtualSerialTransport} from 'react-native-web-serial-api/testing';
+import {Serial} from 'react-native-web-serial-api';
+
+class Thermometer extends SerialDevice {
+  usbVendorId = 0x0403;
+  usbProductId = 0x6001;
+  #timer?: ReturnType<typeof setInterval>;
+
+  onOpen() {                          // host opened the port
+    this.send('READY\r\n');
+    this.#timer = setInterval(() => this.send(`temp=${20 + Math.random()}C\r\n`), 1000);
+  }
+  onData(bytes: Uint8Array) {         // host wrote to the device
+    if (String.fromCharCode(...bytes).trim() === 'ID?') this.send('ACME-TEMP\r\n');
+  }
+  onHostSignals(s) { /* DTR/RTS/break changed */ }
+  onClose() { clearInterval(this.#timer); }
+}
+
+const transport = new VirtualSerialTransport();
+transport.addDevice(new Thermometer(), {hasPermission: true});
+const serial = new Serial(transport);
+```
+
+Hooks: `onOpen(options)`, `onData(data)`, `onHostSignals(signals)`, `onClose()`
+(all optional, may be async). Helpers: `this.send(bytes|string)`,
+`this.raiseError(message, name?)` (e.g. `'BreakError'`),
+`this.setSignals({dataCarrierDetect, clearToSend, ringIndicator, dataSetReady})`,
+`this.openOptions`. **`EchoDevice`** (loopback), **`SilentDevice`**, and
+**`LineDevice`** (buffers to `\n`, calls `onLine(line)`) are built in.
+`addDevice(device, options?)` reads the device's
+`usbVendorId`/`usbProductId`/`serialNumber`; `options` carries the transport
+knobs (`hasPermission`, `portNumber`, …).
 
 ---
 
@@ -183,14 +213,53 @@ The [example app](example) ships two ways to test on real hardware (or none):
   in-app and shows pass/fail, plus a *Run on connected device* smoke test. This
   works on Android, web, and in an emulator with **no device attached**.
 - **Virtual device (demo)** toggle (overflow menu) injects a
-  `VirtualSerialTransport` (an echo FTDI + a responder "sensor") so the whole
-  Devices → Connect → Terminal flow runs hardware-free.
+  `VirtualSerialTransport` (an FTDI `EchoDevice` + a CP210x `SensorDevice`, both
+  authored as `SerialDevice`s — see [example/src/devices/](example/src/devices))
+  so the whole Devices → Connect → Terminal flow runs hardware-free.
 
 > **Platform note:** demo mode redirects the app's live serial, which only works
 > on Android (where `serial` is this library's polyfill). On web `serial` is the
 > browser's native `navigator.serial`, which the library cannot inject into — but
 > the Self-Test screen still works everywhere because it builds its own
 > `new Serial(virtualTransport)`.
+
+---
+
+## E2E in the emulator
+
+The same `SerialDevice` mocks let you run **UI E2E tests** against an app with no
+USB hardware. Install the mock once at startup behind your own flag:
+
+```ts
+// index.js — debug/E2E build only
+import {installSerialMock, EchoDevice} from 'react-native-web-serial-api/testing';
+import {MyThermometer} from './devices/MyThermometer';
+
+installSerialMock({
+  enabled: process.env.RNWS_SERIAL_MOCK === '1',   // your own gate
+  devices: [new EchoDevice(), new MyThermometer()],
+});
+```
+
+`installSerialMock` builds a `VirtualSerialTransport` and calls `setUsbSerial`, so
+`navigator.serial` now talks to your simulated devices.
+
+The example app ships a **Maestro** suite ([example/.maestro/](example/.maestro))
+that drives the real UI against the in-app mock (via the demo toggle):
+
+```sh
+# start an Android emulator, then:
+npm --prefix example run android   # build + install the debug app (Metro)
+npm --prefix example run e2e       # maestro test .maestro
+```
+
+- `demo-echo.yaml` — enable demo mode → connect to the FTDI echo device → send a
+  line in the Terminal → assert it round-trips.
+- `self-test.yaml` — open *Self test* → run the conformance suite → assert green.
+
+This isn't wired into GitHub CI (it needs an emulator); run it locally or in an
+emulator-equipped job. [Detox](https://wix.github.io/Detox/) works the same way —
+the mock is what makes either runner hardware-free.
 
 ---
 

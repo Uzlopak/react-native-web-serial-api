@@ -8,9 +8,10 @@
  * device, so the same test logic runs with no browser and no hardware.
  */
 import {expect} from '@jest/globals';
+import {EchoDevice, type SerialDevice} from '../../testing/serial-device';
 import type {
   VirtualDevice,
-  VirtualDeviceInit,
+  VirtualDeviceOptions,
   VirtualSerialOptions,
 } from '../../testing/virtual-serial';
 import {VirtualSerialTransport} from '../../testing/virtual-serial';
@@ -78,24 +79,22 @@ export type Harness = {
 };
 
 /**
- * Build a Serial backed by a single permitted echo ("loopback") device and
- * return its already-resolved SerialPort — the WPT manual-test fixture, minus
- * the browser and the hardware.
+ * Build a Serial backed by a single permitted device (an FTDI {@link EchoDevice}
+ * "loopback" by default) and return its already-resolved SerialPort — the WPT
+ * manual-test fixture, minus the browser and the hardware.
  */
 export async function loopbackHarness(
-  deviceInit: Partial<VirtualDeviceInit> = {},
-  options: VirtualSerialOptions = {},
-): Promise<Harness> {
-  const transport = new VirtualSerialTransport(options);
-  const device = transport.addDevice({
+  device: SerialDevice = new EchoDevice({
     usbVendorId: 0x0403,
     usbProductId: 0x6001,
-    hasPermission: true,
-    behavior: 'echo',
-    ...deviceInit,
-  });
+  }),
+  options: VirtualDeviceOptions = {},
+  transportOptions: VirtualSerialOptions = {},
+): Promise<Harness> {
+  const transport = new VirtualSerialTransport(transportOptions);
+  const handle = transport.addDevice(device, {hasPermission: true, ...options});
   const serial = new Serial(transport);
   const [port] = await serial.getPorts();
   if (!port) throw new Error('loopbackHarness: expected one port');
-  return {serial, transport, device, port};
+  return {serial, transport, device: handle, port};
 }

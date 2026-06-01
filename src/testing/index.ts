@@ -21,14 +21,26 @@ export {
   runSerialConformance,
   serialConformanceTests,
 } from './conformance';
+export type {InstallSerialMockOptions, SerialMockDevice} from './install';
+// Inject a mock device set into a running app (for on-device / emulator E2E).
+export {installSerialMock} from './install';
 export type {
-  DeviceResponder,
+  DeviceIdentity,
+  SerialDeviceHost,
+  SerialDeviceOpenOptions,
+  SerialHostSignals,
+  SerialInputSignals,
+} from './serial-device';
+// Author a whole simulated peripheral by extending SerialDevice.
+export {
+  EchoDevice,
+  LineDevice,
+  SerialDevice,
+  SilentDevice,
+} from './serial-device';
+export type {
   FailableOp,
-  VirtualDeviceBehavior,
-  VirtualDeviceInit,
+  VirtualDeviceOptions,
   VirtualSerialOptions,
 } from './virtual-serial';
-export {
-  VirtualDevice,
-  VirtualSerialTransport,
-} from './virtual-serial';
+export {VirtualDevice, VirtualSerialTransport} from './virtual-serial';

@@ -7,6 +7,7 @@
  * still exercising chunked reads + byte-exact integrity over a large stream.
  */
 import {describe, expect, it} from '@jest/globals';
+import {SerialDevice} from '../../testing/serial-device';
 import {loopbackHarness} from './wpt-helpers';
 
 // Matches the WPT next_byte() (and the Arduino sketch) exactly.
@@ -18,28 +19,29 @@ function makePrng(seed: number): () => number {
   };
 }
 
+// The "device": reads the 8-byte config, then emits |length| PRNG bytes.
+class PrngDevice extends SerialDevice {
+  readonly usbVendorId = 0x0403;
+  readonly usbProductId = 0x6001;
+  onData(data: Uint8Array): void {
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    const s = view.getUint32(0, /*littleEndian=*/ true);
+    const n = view.getUint32(4, /*littleEndian=*/ true);
+    const next = makePrng(s);
+    const out = new Uint8Array(n);
+    for (let i = 0; i < n; ++i) out[i] = next();
+    this.send(out);
+  }
+}
+
 describe('WPT: serialPort_readable', () => {
   it('Reading 1MB from the device succeeds.', async () => {
     const seed = 10;
     const length = 1024 * 1024;
 
     const {port} = await loopbackHarness(
-      {
-        // The "device": read the 8-byte config, then emit |length| PRNG bytes.
-        behavior: data => {
-          const view = new DataView(
-            data.buffer,
-            data.byteOffset,
-            data.byteLength,
-          );
-          const s = view.getUint32(0, /*littleEndian=*/ true);
-          const n = view.getUint32(4, /*littleEndian=*/ true);
-          const next = makePrng(s);
-          const out = new Uint8Array(n);
-          for (let i = 0; i < n; ++i) out[i] = next();
-          return out;
-        },
-      },
+      new PrngDevice(),
+      {},
       {chunkSize: 1024},
     );
 

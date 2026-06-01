@@ -11,7 +11,8 @@
     "web:preview": "vite preview",
     "lint": "biome check",
     "format": "biome check --write",
-    "test": "jest"
+    "test": "jest",
+    "e2e": "maestro test .maestro"
   },
   "dependencies": {
     "react": "19.2.3",

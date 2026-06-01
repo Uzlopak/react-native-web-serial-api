@@ -4,20 +4,21 @@
  * These complement the shared conformance suite with finer-grained assertions.
  */
 import {describe, expect, it, jest} from '@jest/globals';
+import {
+  EchoDevice,
+  type SerialDevice,
+  SilentDevice,
+} from '../testing/serial-device';
 import {VirtualSerialTransport} from '../testing/virtual-serial';
 import {Serial, SerialPort} from '../WebSerial';
 
 const FTDI = {usbVendorId: 0x0403, usbProductId: 0x6001} as const;
 
-function setup(behavior?: 'echo' | 'silent') {
+function setup(device: SerialDevice = new EchoDevice(FTDI)) {
   const transport = new VirtualSerialTransport();
-  const device = transport.addDevice({
-    ...FTDI,
-    hasPermission: true,
-    behavior: behavior ?? 'echo',
-  });
+  const handle = transport.addDevice(device, {hasPermission: true});
   const serial = new Serial(transport);
-  return {transport, device, serial};
+  return {transport, device: handle, serial};
 }
 
 describe('Serial.getPorts()', () => {
@@ -70,7 +71,7 @@ describe('SerialPort.open()', () => {
 
 describe('SerialPort streams', () => {
   it('preserves byte order across multiple writes', async () => {
-    const {serial, device} = setup('silent');
+    const {serial, device} = setup(new SilentDevice(FTDI));
     const [port] = await serial.getPorts();
     await port.open({baudRate: 9600});
     const writer = port.writable!.getWriter();
@@ -83,7 +84,7 @@ describe('SerialPort streams', () => {
   });
 
   it('delivers device-pushed bytes to the readable stream', async () => {
-    const {serial, device} = setup('silent');
+    const {serial, device} = setup(new SilentDevice(FTDI));
     const [port] = await serial.getPorts();
     await port.open({baudRate: 9600});
     const reader = port.readable!.getReader();

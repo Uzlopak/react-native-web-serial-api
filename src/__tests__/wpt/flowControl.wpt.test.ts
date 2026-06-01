@@ -6,6 +6,7 @@
  * receive-buffer "CTS drops when full" model under hardware flow control.
  */
 import {describe, expect, it} from '@jest/globals';
+import {EchoDevice} from '../../testing/serial-device';
 import {loopbackHarness} from './wpt-helpers';
 
 describe('WPT: serialPort_loopback flow control', () => {
@@ -27,7 +28,9 @@ describe('WPT: serialPort_loopback flow control', () => {
   it('Hardware flow control automatically sets RTS pin', async () => {
     // The device de-asserts CTS once its receive buffer fills; a small threshold
     // keeps the test fast and deterministic.
-    const {port} = await loopbackHarness({flowControlThreshold: 16});
+    const {port} = await loopbackHarness(new EchoDevice(), {
+      flowControlThreshold: 16,
+    });
     await port.open({
       baudRate: 115200,
       bufferSize: 255,

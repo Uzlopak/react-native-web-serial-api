@@ -1,0 +1,15 @@
+# End-to-end: run the on-device conformance suite (the same serialConformanceTests
+# that run under Jest) from the app's Self Test screen and assert it's all green.
+# Note: Maestro matches text as a *full* regex, hence the `.*` wildcards.
+appId: dev.react_native_web_serial_api.example
+---
+- launchApp:
+    clearState: true
+# Wait for the JS bundle to render before driving the UI.
+- assertVisible: 'Simple USB Terminal'
+- tapOn:
+    id: 'appbar-menu'
+- tapOn: 'Self test.*'
+- tapOn: 'Run conformance suite'
+- assertVisible: '.*passed.*'
+- assertNotVisible: '✗'

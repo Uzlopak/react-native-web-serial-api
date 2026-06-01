@@ -26,7 +26,9 @@ export function AppBar({title, onBack, menu}: Props) {
         {menu?.length ? (
           <TouchableOpacity
             onPress={() => setOpen(true)}
-            style={styles.iconBtn}>
+            style={styles.iconBtn}
+            testID="appbar-menu"
+            accessibilityLabel="More options">
             <Text style={styles.icon}>⋮</Text>
           </TouchableOpacity>
         ) : null}

@@ -466,6 +466,7 @@ export function TerminalScreen({port, settings, onBack}: Props) {
 
       <View style={styles.sendRow}>
         <TextInput
+          testID="terminal-input"
           style={styles.input}
           value={input}
           onChangeText={onChangeInput}
@@ -477,6 +478,8 @@ export function TerminalScreen({port, settings, onBack}: Props) {
           onSubmitEditing={doSend}
         />
         <TouchableOpacity
+          testID="terminal-send"
+          accessibilityLabel="Send"
           style={[styles.sendBtn, sendDisabled && styles.sendBtnDisabled]}
           onPress={doSend}
           disabled={sendDisabled}>

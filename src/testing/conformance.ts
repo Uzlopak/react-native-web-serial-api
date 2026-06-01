@@ -16,7 +16,8 @@
 
 import type {SerialOptions} from '../WebSerial';
 import {Serial} from '../WebSerial';
-import type {VirtualDeviceInit} from './virtual-serial';
+import {EchoDevice, SerialDevice, SilentDevice} from './serial-device';
+import type {VirtualDeviceOptions} from './virtual-serial';
 import {VirtualSerialTransport} from './virtual-serial';
 
 export type ConformanceTest = {
@@ -128,17 +129,16 @@ async function readBytes(
 const FTDI = {usbVendorId: 0x0403, usbProductId: 0x6001} as const;
 
 /** One permitted device + a Serial wired to it; the device echoes by default. */
-async function onePort(init: Partial<VirtualDeviceInit> = {}) {
+async function onePort(
+  device: SerialDevice = new EchoDevice(FTDI),
+  options: VirtualDeviceOptions = {},
+) {
   const transport = new VirtualSerialTransport();
-  const device = transport.addDevice({
-    ...FTDI,
-    hasPermission: true,
-    ...init,
-  });
+  const handle = transport.addDevice(device, {hasPermission: true, ...options});
   const serial = new Serial(transport);
   const [port] = await serial.getPorts();
   assert(port !== undefined, 'fixture failed: expected one port');
-  return {transport, serial, device, port};
+  return {transport, serial, device: handle, port};
 }
 
 // ── The suite ────────────────────────────────────────────────────────────────
@@ -148,12 +148,11 @@ export const serialConformanceTests: ConformanceTest[] = [
     name: 'getPorts() lists only devices the app has permission for',
     async run() {
       const transport = new VirtualSerialTransport();
-      transport.addDevice({...FTDI, hasPermission: true});
-      transport.addDevice({
-        usbVendorId: 0x10c4,
-        usbProductId: 0xea60,
-        hasPermission: false,
-      });
+      transport.addDevice(new EchoDevice(FTDI), {hasPermission: true});
+      transport.addDevice(
+        new EchoDevice({usbVendorId: 0x10c4, usbProductId: 0xea60}),
+        {hasPermission: false},
+      );
       const serial = new Serial(transport);
       const ports = await serial.getPorts();
       assertEqual(
@@ -172,10 +171,9 @@ export const serialConformanceTests: ConformanceTest[] = [
     name: 'requestPort() grants permission and returns the chosen port',
     async run() {
       const transport = new VirtualSerialTransport();
-      const device = transport.addDevice({
-        usbVendorId: 0x2341,
-        usbProductId: 0x0043,
-      });
+      const device = transport.addDevice(
+        new EchoDevice({usbVendorId: 0x2341, usbProductId: 0x0043}),
+      );
       const serial = new Serial(transport);
       assertEqual(
         (await serial.getPorts()).length,
@@ -196,7 +194,7 @@ export const serialConformanceTests: ConformanceTest[] = [
     name: 'requestPort() rejects with NotFoundError when cancelled',
     async run() {
       const transport = new VirtualSerialTransport();
-      transport.addDevice({...FTDI});
+      transport.addDevice(new EchoDevice(FTDI));
       const serial = new Serial(transport);
       transport.rejectNextPortPicker();
       await assertRejects(() => serial.requestPort(), 'cancelled picker', {
@@ -265,7 +263,7 @@ export const serialConformanceTests: ConformanceTest[] = [
   {
     name: 'writable forwards the host bytes to the device',
     async run() {
-      const {port, device} = await onePort({behavior: 'silent'});
+      const {port, device} = await onePort(new SilentDevice(FTDI));
       await port.open({baudRate: 9600});
       const writer = port.writable!.getWriter();
       await writer.write(Uint8Array.from([0x41, 0x42, 0x43]));
@@ -282,9 +280,14 @@ export const serialConformanceTests: ConformanceTest[] = [
   {
     name: 'a scripted responder can answer host writes',
     async run() {
-      const {port} = await onePort({
-        behavior: data => [Array.from(data).reduce((a, b) => a + b, 0) & 0xff],
-      });
+      class ChecksumDevice extends SerialDevice {
+        readonly usbVendorId = FTDI.usbVendorId;
+        readonly usbProductId = FTDI.usbProductId;
+        onData(data: Uint8Array) {
+          this.send([Array.from(data).reduce((a, b) => a + b, 0) & 0xff]);
+        }
+      }
+      const {port} = await onePort(new ChecksumDevice());
       await port.open({baudRate: 9600});
       const reader = port.readable!.getReader();
       const writer = port.writable!.getWriter();

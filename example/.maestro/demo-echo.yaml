@@ -1,0 +1,30 @@
+# End-to-end: drive the whole app against the in-app virtual device mock (no USB
+# hardware). Enables "Virtual device (demo)" (a SerialDevice-backed transport),
+# connects to the FTDI echo device, sends a line, and asserts it round-trips.
+# Note: Maestro matches text as a *full* regex, hence the `.*` wildcards.
+#
+# Prereqs: an Android emulator/device with the example debug build installed
+# (npm run android), then: npm run e2e
+appId: dev.react_native_web_serial_api.example
+---
+- launchApp:
+    clearState: true
+# Wait for the JS bundle to render before driving the UI.
+- assertVisible: 'Simple USB Terminal'
+- tapOn:
+    id: 'appbar-menu'
+- tapOn: 'Virtual device.*'
+- assertVisible: 'Virtual device mode.*'
+- assertVisible: 'FTDI'
+- tapOn: 'FTDI'
+- tapOn: 'Connect'
+# Terminal defaults to HEX mode; switch to text so we can type/read plainly.
+- tapOn:
+    id: 'appbar-menu'
+- tapOn: 'HEX Mode'
+- tapOn:
+    id: 'terminal-input'
+- inputText: 'PING'
+- tapOn:
+    id: 'terminal-send'
+- assertVisible: '.*PING.*'
