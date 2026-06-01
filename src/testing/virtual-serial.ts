@@ -74,6 +74,12 @@ export type VirtualDeviceInit = {
    * Defaults to true.
    */
   loopbackSignals?: boolean;
+  /**
+   * When the port is opened with hardware (RTS/CTS) flow control, the device
+   * de-asserts CTS once this many bytes have been written without the receiver
+   * draining — modelling a full receive buffer. Defaults to 256.
+   */
+  flowControlThreshold?: number;
 };
 
 export type VirtualSerialOptions = {
@@ -89,6 +95,12 @@ export type VirtualSerialOptions = {
    * mirroring the real Android picker. Defaults to true.
    */
   autoGrantPermission?: boolean;
+  /**
+   * If set, inbound data larger than this is delivered as several `onData`
+   * events of at most this many bytes — modelling how a real serial port hands
+   * data up in chunks. 0/undefined delivers each write's reply in one event.
+   */
+  chunkSize?: number;
 };
 
 /** Operations whose next invocation can be made to fail (error injection). */
@@ -141,7 +153,19 @@ export class VirtualDevice {
   behavior: VirtualDeviceBehavior;
   loopbackSignals: boolean;
   flowControl: FlowControl = 'NONE';
+  flowControlThreshold: number;
   openOptions: Required<OpenOptions> | null = null;
+
+  /**
+   * When non-null, the device delivers at most this many bytes before raising a
+   * `BufferOverrunError` — models a fixed-size receive buffer overflowing.
+   */
+  overrunLimit: number | null = null;
+
+  // @internal counters used by the transport.
+  _rxDelivered = 0;
+  _overran = false;
+  _hwWritten = 0;
 
   readonly output: OutputSignals = {dtr: false, rts: false, brk: false};
   readonly input: InputSignals = {
@@ -173,6 +197,7 @@ export class VirtualDevice {
     this.hasPermission = init.hasPermission ?? false;
     this.behavior = init.behavior ?? 'echo';
     this.loopbackSignals = init.loopbackSignals ?? true;
+    this.flowControlThreshold = init.flowControlThreshold ?? 256;
   }
 
   /** Push inbound bytes to the host as if the device sent them unprompted. */
@@ -180,9 +205,24 @@ export class VirtualDevice {
     this.#transport._deliver(this, [...bytes].map(toByte));
   }
 
-  /** Raise a read error on the host's readable stream. */
-  emitError(message: string): void {
-    this.#transport._error(this, message);
+  /**
+   * Raise a read error on the host's readable stream. `name` is the W3C error
+   * type (e.g. "BreakError", "BufferOverrunError"); the current polyfill ignores
+   * it and surfaces "NetworkError" regardless (a documented spec gap).
+   */
+  emitError(message: string, name?: string): void {
+    this.#transport._error(this, message, name);
+  }
+
+  /**
+   * Make the device deliver at most `bytes` bytes and then raise a
+   * `BufferOverrunError`, modelling a receive buffer of that size overflowing.
+   */
+  overrunAfter(bytes: number): this {
+    this.overrunLimit = bytes;
+    this._rxDelivered = 0;
+    this._overran = false;
+    return this;
   }
 
   /** Make the next call to `op` reject once (error injection). */
@@ -230,6 +270,7 @@ export class VirtualSerialTransport implements SerialTransport {
   readonly #devices: VirtualDevice[] = [];
   readonly #latencyMs: number;
   readonly #autoGrant: boolean;
+  readonly #chunkSize: number;
   #nextDeviceId = 1;
 
   readonly #dataListeners = new Set<Listener<DataEvent>>();
@@ -247,6 +288,7 @@ export class VirtualSerialTransport implements SerialTransport {
   constructor(options: VirtualSerialOptions = {}) {
     this.#latencyMs = options.latencyMs ?? 0;
     this.#autoGrant = options.autoGrantPermission ?? true;
+    this.#chunkSize = options.chunkSize ?? 0;
     for (const init of options.devices ?? []) this.addDevice(init);
   }
 
@@ -318,22 +360,53 @@ export class VirtualSerialTransport implements SerialTransport {
   /** @internal deliver inbound bytes to the host's readable stream. */
   _deliver(device: VirtualDevice, data: number[]): void {
     if (!device.attached || !device.isOpen || !device.reading) return;
-    const event: DataEvent = {
-      deviceId: device.deviceId,
-      portNumber: device.portNumber,
-      data,
-    };
-    this.#schedule(() => this.#emit(this.#dataListeners, event));
+
+    if (device.overrunLimit != null) {
+      if (device._overran) return; // buffer already overflowed; drop the rest
+      const remaining = device.overrunLimit - device._rxDelivered;
+      if (data.length > remaining) {
+        const head = data.slice(0, Math.max(0, remaining));
+        device._rxDelivered += head.length;
+        device._overran = true;
+        if (head.length) this.#emitData(device, head);
+        this._error(device, 'Receive buffer overrun', 'BufferOverrunError');
+        return;
+      }
+      device._rxDelivered += data.length;
+    }
+
+    this.#emitData(device, data);
   }
 
   /** @internal raise a read error for a device's open port. */
-  _error(device: VirtualDevice, message: string): void {
+  _error(device: VirtualDevice, message: string, name?: string): void {
     const event: ErrorEvent = {
       deviceId: device.deviceId,
       portNumber: device.portNumber,
       error: message,
+      errorName: name,
     };
     this.#schedule(() => this.#emit(this.#errorListeners, event));
+  }
+
+  /** Deliver `data` as one or more onData events, honouring `chunkSize`. */
+  #emitData(device: VirtualDevice, data: number[]): void {
+    const emitOne = (slice: number[]) => {
+      const event: DataEvent = {
+        deviceId: device.deviceId,
+        portNumber: device.portNumber,
+        data: slice,
+      };
+      this.#schedule(() => this.#emit(this.#dataListeners, event));
+    };
+    const chunk = this.#chunkSize;
+    if (chunk && data.length > chunk) {
+      for (let i = 0; i < data.length; i += chunk) {
+        emitOne(data.slice(i, i + chunk));
+      }
+    } else {
+      emitOne(data);
+    }
   }
 
   // ── SerialTransport: discovery & permission ────────────────────────────────
@@ -392,6 +465,7 @@ export class VirtualSerialTransport implements SerialTransport {
     }
     device.isOpen = true;
     device.openOptions = {...DEFAULT_OPEN_OPTIONS, ...options};
+    device._hwWritten = 0;
     return this.#resolve();
   }
 
@@ -428,6 +502,7 @@ export class VirtualSerialTransport implements SerialTransport {
     }
     const bytes = data.map(toByte);
     device.written.push(bytes);
+    if (device.flowControl === 'RTS_CTS') device._hwWritten += bytes.length;
     this.#applyBehavior(device, bytes);
     return this.#resolve();
   }
@@ -495,7 +570,14 @@ export class VirtualSerialTransport implements SerialTransport {
   }
 
   getCTS(deviceId: number, portNumber: number): Promise<boolean> {
-    return this.#resolve(this.#find(deviceId, portNumber)?.input.cts ?? false);
+    const device = this.#find(deviceId, portNumber);
+    // Under hardware (RTS/CTS) flow control the device drives CTS itself,
+    // de-asserting it once its receive buffer fills (modelled by the byte
+    // threshold). Otherwise CTS just reflects the loopback wiring.
+    if (device && device.flowControl === 'RTS_CTS') {
+      return this.#resolve(device._hwWritten < device.flowControlThreshold);
+    }
+    return this.#resolve(device?.input.cts ?? false);
   }
 
   getRI(deviceId: number, portNumber: number): Promise<boolean> {

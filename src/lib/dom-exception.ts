@@ -115,8 +115,8 @@ class DOMExceptionPolyfill extends Error {
     this.code = DOM_EXCEPTION_CODES[name] ?? 0;
 
     // Provide a useful stack trace in V8 / SpiderMonkey
-    if (typeof (Error as any).captureStackTrace === 'function') {
-      (Error as any).captureStackTrace(this, new.target);
+    if (typeof (Error as ErrorConstructor).captureStackTrace === 'function') {
+      (Error as ErrorConstructor).captureStackTrace(this, new.target);
     }
   }
 
@@ -203,8 +203,10 @@ class DOMExceptionPolyfill extends Error {
   }
 }
 
-export const DOMExceptionImpl = (globalThis as any).DOMException
-  ? ((globalThis as any).DOMException as DOMExceptionConstructor)
+export const DOMExceptionImpl = (globalThis as Record<string, unknown>)
+  .DOMException
+  ? ((globalThis as Record<string, unknown>)
+      .DOMException as DOMExceptionConstructor)
   : (DOMExceptionPolyfill as DOMExceptionConstructor);
 
 export {

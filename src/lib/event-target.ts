@@ -90,6 +90,18 @@ type SecretMap = Record<string, ListenerInfo[]>;
 
 const wm = new WeakMap<object, SecretMap>();
 
+// Optional event-propagation parents. An event dispatched on a child also runs
+// its parent's listeners, while event.target stays the original child. This
+// models the W3C "SerialPort's parent is the Serial" relationship, so a
+// connect/disconnect observed on `serial` reports event.target === the
+// SerialPort (per the Web Serial spec and WPT).
+const eventParents = new WeakMap<EventTarget, EventTarget>();
+
+/** Make events dispatched on `child` also bubble to `parent`'s listeners. */
+export function setEventParent(child: EventTarget, parent: EventTarget): void {
+  eventParents.set(child, parent);
+}
+
 function define<T extends object>(
   target: T,
   name: string,
@@ -145,17 +157,22 @@ export class EventTarget {
   }
 
   dispatchEvent(event: Event): boolean {
-    const secret = wm.get(this)!;
-    const listeners = secret[event.type];
-
-    if (listeners) {
-      define(event, 'target', this);
-      define(event, 'currentTarget', this);
-      listeners.slice(0).some(dispatch, event);
-      define(event, 'target', null);
-      define(event, 'currentTarget', null);
+    // The event's target is the node it was dispatched on; it then bubbles up
+    // the eventParents chain (currentTarget changes, target does not).
+    define(event, 'target', this);
+    let node: EventTarget | null = this;
+    while (node) {
+      const listeners = wm.get(node)?.[event.type];
+      if (listeners?.length) {
+        define(event, 'currentTarget', node);
+        listeners.slice(0).some(dispatch, event);
+      }
+      if (event.cancelBubble) break;
+      node = eventParents.get(node) ?? null;
     }
-
+    // Per the DOM, target persists after dispatch (a re-dispatch overwrites it
+    // at the top of this method); only currentTarget is cleared.
+    define(event, 'currentTarget', null);
     return true;
   }
 

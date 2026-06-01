@@ -155,6 +155,26 @@ const smoke = await runRealDeviceSmokeTest(serial);     // small, safe, real dev
 
 ---
 
+## WPT spec compliance
+
+[`src/__tests__/wpt/`](src/__tests__/wpt) ports the **official Web Platform
+Tests** for the Web Serial API (vendored in `tmp/serial/`) so the spec's own test
+logic runs against our polyfill via the virtual loopback device — proof of W3C
+compliance, not just our own assertions. It covers loopback read/write, flow
+control, large-stream throughput, disconnect, typed read errors, and the
+interface (IDL) shape.
+
+Porting the spec faithfully originally surfaced five real gaps in the polyfill
+(typed `BreakError`/`BufferOverrunError` on the readable; disconnect rejecting
+the pending read/write with `NetworkError`; the `disconnect` event `target`; and
+a leaked subscription on `readable.cancel()`). All are now **fixed** in
+`WebSerial.ts`, and these tests pass as regression guards. See
+[`src/__tests__/wpt/README.md`](src/__tests__/wpt/README.md) for the fix table
+and the list of browser-security WPT files that don't apply to a non-browser
+polyfill.
+
+---
+
 ## On-device testing (example app)
 
 The [example app](example) ships two ways to test on real hardware (or none):

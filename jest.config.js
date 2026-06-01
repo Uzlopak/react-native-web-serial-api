@@ -9,6 +9,9 @@
 module.exports = {
   preset: '@react-native/jest-preset',
   roots: ['<rootDir>/src'],
+  // Only *.test.ts/tsx are test files — so shared helpers like
+  // src/__tests__/wpt/wpt-helpers.ts are not mistaken for empty test suites.
+  testMatch: ['<rootDir>/src/**/*.{test,spec}.{ts,tsx}'],
   // Pin react / react-native to this package's own copy so the preset's mocks
   // resolve consistently (the example app keeps its own copies).
   moduleNameMapper: {

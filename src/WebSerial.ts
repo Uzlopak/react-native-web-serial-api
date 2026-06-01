@@ -4,7 +4,7 @@ import {
   WritableStream,
 } from 'web-streams-polyfill';
 import {DOMException} from './lib/dom-exception';
-import {Event, EventTarget} from './lib/event-target';
+import {Event, EventTarget, setEventParent} from './lib/event-target';
 import {createDeferredPromise} from './lib/promise';
 import type {
   ConnectEvent,
@@ -255,6 +255,12 @@ export class SerialPort extends EventTarget {
   #dataSubscription: {remove: () => void} | null = null;
   #errorSubscription: {remove: () => void} | null = null;
 
+  // The live stream controllers, captured in the readable/writable getters, so
+  // a device loss can error the in-flight read/write with a "NetworkError".
+  #readableController: ReadableStreamDefaultController<Uint8Array> | null =
+    null;
+  #writableController: WritableStreamDefaultController | null = null;
+
   constructor(
     usb: SerialTransport,
     deviceId: number,
@@ -291,24 +297,29 @@ export class SerialPort extends EventTarget {
    * After this, a later open() (e.g. when the device is re-attached) succeeds.
    */
   #handleDeviceLost(): void {
-    // Tear down read/write streams without invoking the OS on the dead device.
+    // Reject any in-flight read/write with a "NetworkError" (per spec), erroring
+    // the stream controllers directly. We must NOT cancel()/abort() the streams:
+    // cancel() rejects on a reader-locked stream (leaving the read orphaned) and
+    // both would try to invoke the OS on the now-gone device.
+    const lost = new DOMException('The device has been lost.', 'NetworkError');
     if (this.#readable) {
       this.#readFatal = true;
       try {
-        // No active reader is required for cancel(); errors are non-fatal here.
-        this.#readable.cancel().catch(() => {});
+        this.#readableController?.error(lost);
       } catch {}
     }
     if (this.#writable) {
       this.#writeFatal = true;
       try {
-        this.#writable.abort().catch(() => {});
+        this.#writableController?.error(lost);
       } catch {}
     }
     this.#dataSubscription?.remove();
     this.#errorSubscription?.remove();
     this.#dataSubscription = null;
     this.#errorSubscription = null;
+    this.#readableController = null;
+    this.#writableController = null;
 
     this.#readable = null;
     this.#writable = null;
@@ -394,6 +405,7 @@ export class SerialPort extends EventTarget {
     const stream = new ReadableStream<Uint8Array>(
       {
         start(controller) {
+          self.#readableController = controller;
           self.#dataSubscription = self.#usb.onData((event: DataEvent) => {
             if (
               event.deviceId === deviceId &&
@@ -409,7 +421,15 @@ export class SerialPort extends EventTarget {
               event.portNumber === portNumber
             ) {
               self.#readFatal = true; // Set this.[[readFatal]] to true.
-              controller.error(new DOMException(event.error, 'NetworkError'));
+              // Surface the spec error type (BreakError, BufferOverrunError,
+              // FramingError, ParityError, …) when the transport reports one;
+              // fall back to NetworkError otherwise.
+              controller.error(
+                new DOMException(
+                  event.error,
+                  event.errorName ?? 'NetworkError',
+                ),
+              );
               self.#handleClosingReadableStream();
             }
           });
@@ -456,6 +476,9 @@ export class SerialPort extends EventTarget {
 
     const stream = new WritableStream<Uint8Array>(
       {
+        start(controller) {
+          self.#writableController = controller;
+        },
         async write(chunk) {
           try {
             await self.#usb.write(deviceId, portNumber, Array.from(chunk));
@@ -680,6 +703,8 @@ export class SerialPort extends EventTarget {
     this.#errorSubscription?.remove();
     this.#dataSubscription = null;
     this.#errorSubscription = null;
+    this.#readableController = null;
+    this.#writableController = null;
 
     this.#state = 'closed'; // 10.1.2. Set this.[[state]] to "closed".
     this.#readFatal = false; // 10.1.3. Set this.[[readFatal]] and this.[[writeFatal]] to false.
@@ -824,6 +849,17 @@ export class SerialPort extends EventTarget {
   #handleClosingReadableStream(): void {
     // To handle closing the readable stream perform the following steps:
 
+    // Drop the native data/error subscription tied to this readable. Without
+    // this a later readable (after cancel() + re-acquire) would coexist with the
+    // old subscription, which then enqueues into the cancelled controller and
+    // throws. close()/handleDeviceLost() also clear these; doing it here covers
+    // a standalone readable.cancel().
+    this.#dataSubscription?.remove();
+    this.#errorSubscription?.remove();
+    this.#dataSubscription = null;
+    this.#errorSubscription = null;
+    this.#readableController = null;
+
     // 1. Set this.[[readable]] to null.
     this.#readable = null;
 
@@ -839,6 +875,8 @@ export class SerialPort extends EventTarget {
    */
   #handleClosingWritableStream(): void {
     // To handle closing the writable stream perform the following steps:
+
+    this.#writableController = null;
 
     // 1. Set this.[[writable]] to null.
     this.#writable = null;
@@ -922,14 +960,15 @@ export class Serial extends EventTarget {
               this.#knownPorts.delete(key);
               this.#knownPorts.set(newKey, port);
             }
+            // Dispatched on the port; it bubbles to this Serial (event.target
+            // stays the port, per spec — see setEventParent below).
             port.dispatchEvent(new Event('connect'));
             matched = true;
           }
         }
-        this.dispatchEvent(new Event('connect'));
-        // If we matched no known port this is a brand-new device; getPorts()
-        // will surface it on the next refresh.
-        void matched;
+        // No known port matched: a brand-new device. Fire a Serial-level
+        // "connect" so listeners refresh; getPorts() surfaces the new port.
+        if (!matched) this.dispatchEvent(new Event('connect'));
       });
 
       // A USB device was detached. Reset the matching port(s) to a closed,
@@ -938,12 +977,18 @@ export class Serial extends EventTarget {
       // dispatches "disconnect" on the port.
       this.#usb.onDisconnect((event: ConnectEvent) => {
         const prefix = `${event.deviceId}:`;
+        let matched = false;
         for (const [key, port] of [...this.#knownPorts.entries()]) {
           if (key.startsWith(prefix)) {
+            // handleDeviceLost() dispatches "disconnect" on the port, which
+            // bubbles here with event.target === the port (per spec).
             portInternals.get(port)?.handleDeviceLost();
+            matched = true;
           }
         }
-        this.dispatchEvent(new Event('disconnect'));
+        // No known port matched (e.g. a device never opened): fire a
+        // Serial-level "disconnect" so listeners can still refresh.
+        if (!matched) this.dispatchEvent(new Event('disconnect'));
       });
     } catch {
       this.#usb = null;
@@ -1022,10 +1067,16 @@ export class Serial extends EventTarget {
       if (!hasPermission) continue;
       const key = this.#portKey(deviceId, portNumber);
       if (!this.#knownPorts.has(key)) {
-        this.#knownPorts.set(
-          key,
-          new SerialPort(usb, deviceId, portNumber, usbVendorId, usbProductId),
+        const port = new SerialPort(
+          usb,
+          deviceId,
+          portNumber,
+          usbVendorId,
+          usbProductId,
         );
+        // The port's connect/disconnect events bubble to this Serial.
+        setEventParent(port, this);
+        this.#knownPorts.set(key, port);
       }
       ports.push(this.#knownPorts.get(key)!);
     }
@@ -1098,16 +1149,16 @@ export class Serial extends EventTarget {
     // 5.6. Let port be a SerialPort representing the port chosen by the user.
     const key = `${portId.deviceId}:${portId.portNumber}`;
     if (!this.#knownPorts.has(key)) {
-      this.#knownPorts.set(
-        key,
-        new SerialPort(
-          usb,
-          portId.deviceId,
-          portId.portNumber,
-          portId.usbVendorId,
-          portId.usbProductId,
-        ),
+      const port = new SerialPort(
+        usb,
+        portId.deviceId,
+        portId.portNumber,
+        portId.usbVendorId,
+        portId.usbProductId,
       );
+      // The port's connect/disconnect events bubble to this Serial.
+      setEventParent(port, this);
+      this.#knownPorts.set(key, port);
     }
 
     // 5.7. Resolve promise with port.

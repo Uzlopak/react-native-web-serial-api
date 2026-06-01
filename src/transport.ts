@@ -57,6 +57,14 @@ export type ErrorEvent = {
   deviceId: number;
   portNumber: number;
   error: string;
+  /**
+   * Optional spec error name (e.g. "BreakError", "BufferOverrunError",
+   * "FramingError", "ParityError") for a typed read error. The current polyfill
+   * ignores this and always surfaces "NetworkError" on the readable stream; it
+   * exists so a transport can report the precise W3C error type, and so the
+   * WPT-derived spec tests can document that gap (see src/__tests__/wpt).
+   */
+  errorName?: string;
 };
 
 export type ConnectEvent = {
