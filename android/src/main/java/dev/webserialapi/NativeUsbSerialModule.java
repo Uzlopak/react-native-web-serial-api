@@ -657,11 +657,17 @@ public class NativeUsbSerialModule extends NativeUsbSerialSpec {
             Intent intent = new Intent(ACTION_USB_PERMISSION);
             intent.putExtra(EXTRA_REQUEST_CODE, requestCode);
 
+            intent.setPackage(getReactApplicationContext().getPackageName());
+
+            int flags = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S
+                    ? PendingIntent.FLAG_MUTABLE
+                    : 0;
+
             PendingIntent permissionIntent = PendingIntent.getBroadcast(
                 getReactApplicationContext(),
                 requestCode,
                 intent,
-                PendingIntent.FLAG_IMMUTABLE
+                flags
             );
             usbManager.requestPermission(driver.getDevice(), permissionIntent);
         } catch (Exception e) {

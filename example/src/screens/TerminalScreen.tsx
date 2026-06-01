@@ -249,6 +249,14 @@ export function TerminalScreen({port, settings, onBack}: Props) {
   }, [teardown]);
 
   const connect = React.useCallback(async () => {
+    // Idempotent: ignore overlapping triggers. On re-attach the device may emit
+    // several "connect" events (USB attach + permission-grant), and port.open()
+    // itself awaits the permission dialog — so guard against re-entrancy that
+    // would otherwise cause a double-open ("port already open") and leave us
+    // stuck in the failed/closed state.
+    if (connectedRef.current !== 'False') {
+      return;
+    }
     connectedRef.current = 'Pending';
     setConnected('Pending');
     try {

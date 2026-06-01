@@ -135,23 +135,24 @@ export function DevicesScreen({onSelect}: Props) {
     [onSelect],
   );
 
-  // Tap on an unpermitted row: request Android USB permission. On grant, the
-  // library emits "connect" -> refresh() runs -> the row becomes permitted.
-  const grantPermission = React.useCallback(async (row: DeviceRow) => {
-    setError(null);
-    const usb = nativeUsb();
-    if (!usb) {
-      return;
-    }
-    try {
-      await usb.requestPermission(row.deviceId);
-    } catch (e: any) {
-      setError(e?.message ?? String(e));
-    } finally {
-      // Always refresh after permission attempt (fixes stale state)
-      refresh(); 
-    }
-  }, [refresh]);
+  // Tap on an unpermitted row: request Android USB permission. On grant, 
+  // refresh immediately.
+  const grantPermission = React.useCallback(
+    async (row: DeviceRow) => {
+      setError(null);
+      const usb = nativeUsb();
+      if (!usb) {
+        return;
+      }
+      try {
+        await usb.requestPermission(row.deviceId);
+      } catch (e: any) {
+        setError(e?.message ?? String(e));
+      }
+      refresh();
+    },
+    [refresh],
+  );
 
   const requestNew = React.useCallback(async () => {
     setError(null);
@@ -171,7 +172,10 @@ export function DevicesScreen({onSelect}: Props) {
         refresh();
       }
     };
-    const subscription = AppState.addEventListener('change', handleAppStateChange);
+    const subscription = AppState.addEventListener(
+      'change',
+      handleAppStateChange,
+    );
     return () => {
       subscription.remove();
     };
