@@ -209,6 +209,23 @@ export const serialConformanceTests: ConformanceTest[] = [
       await assertRejects(() => port.open({baudRate: 0}), 'baudRate 0', {
         type: TypeError,
       });
+      await assertRejects(() => port.open({baudRate: -1}), 'baudRate -1', {
+        type: TypeError,
+      });
+      await assertRejects(
+        () => port.open({baudRate: Number.NaN}),
+        'baudRate NaN',
+        {
+          type: TypeError,
+        },
+      );
+      await assertRejects(
+        () => port.open({baudRate: Number.POSITIVE_INFINITY}),
+        'baudRate +Inf',
+        {
+          type: TypeError,
+        },
+      );
       await assertRejects(
         () =>
           port.open({baudRate: 9600, dataBits: 5} as unknown as SerialOptions),
@@ -219,6 +236,30 @@ export const serialConformanceTests: ConformanceTest[] = [
         () =>
           port.open({baudRate: 9600, stopBits: 3} as unknown as SerialOptions),
         'stopBits 3',
+        {type: TypeError},
+      );
+      await assertRejects(
+        () =>
+          port.open({baudRate: 9600, bufferSize: -1} as SerialOptions),
+        'bufferSize -1',
+        {type: TypeError},
+      );
+      await assertRejects(
+        () =>
+          port.open({
+            baudRate: 9600,
+            bufferSize: Number.NaN,
+          } as SerialOptions),
+        'bufferSize NaN',
+        {type: TypeError},
+      );
+      await assertRejects(
+        () =>
+          port.open({
+            baudRate: 9600,
+            bufferSize: Number.POSITIVE_INFINITY,
+          } as SerialOptions),
+        'bufferSize +Inf',
         {type: TypeError},
       );
       await port.open({baudRate: 9600});
@@ -384,9 +425,9 @@ export const serialConformanceTests: ConformanceTest[] = [
     },
   },
   {
-    name: 'forget() makes the port un-openable',
+    name: 'forget() invalidates one instance but allows reacquiring a usable port',
     async run() {
-      const {port} = await onePort();
+      const {serial, port} = await onePort();
       await port.forget();
       await assertRejects(
         () => port.open({baudRate: 9600}),
@@ -395,6 +436,15 @@ export const serialConformanceTests: ConformanceTest[] = [
           name: 'InvalidStateError',
         },
       );
+
+      const [reacquired] = await serial.getPorts();
+      assert(reacquired !== undefined, 'expected a port after forget()');
+      assert(
+        reacquired !== port,
+        'forget() should not permanently poison the cached port entry',
+      );
+      await reacquired.open({baudRate: 9600});
+      await reacquired.close();
     },
   },
 ];

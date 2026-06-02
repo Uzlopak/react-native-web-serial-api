@@ -171,6 +171,7 @@ type PortInternals = {
   getVid(): number | undefined;
   getPid(): number | undefined;
   getPortNumber(): number;
+  isForgotten(): boolean;
   setDeviceId(id: number): void;
   /** Reset to a closed, re-openable state after the device is physically lost. */
   handleDeviceLost(): void;
@@ -186,6 +187,7 @@ const kDefaultFlowControl: FlowControlType = 'none';
 const kAcceptableDataBits = [7, 8] as const;
 const kAcceptableStopBits = [1, 2] as const;
 const kAcceptableParity: ParityType[] = ['none', 'even', 'odd'];
+const kAcceptableFlowControl: FlowControlType[] = ['none', 'hardware'];
 
 function parityToNative(parity: ParityType): number {
   switch (parity) {
@@ -265,6 +267,24 @@ export class SerialPort extends EventTarget {
     null;
   #writableController: WritableStreamDefaultController | null = null;
 
+  #resetToClosedState(state: 'closed' | 'forgotten' = 'closed'): void {
+    this.#dataSubscription?.remove();
+    this.#errorSubscription?.remove();
+    this.#dataSubscription = null;
+    this.#errorSubscription = null;
+    this.#readableController = null;
+    this.#writableController = null;
+
+    this.#readable = null;
+    this.#writable = null;
+    this.#readFatal = false;
+    this.#writeFatal = false;
+    this.#pendingClosePromise = null;
+    this.#bufferSize = undefined;
+    this.#state = state;
+    this.#connected = false;
+  }
+
   constructor(
     usb: SerialTransport,
     deviceId: number,
@@ -285,6 +305,7 @@ export class SerialPort extends EventTarget {
       getVid: () => this.#usbVendorId,
       getPid: () => this.#usbProductId,
       getPortNumber: () => this.#portNumber,
+      isForgotten: () => this.#state === 'forgotten',
       setDeviceId: (id: number) => {
         this.#deviceId = id;
         serialPortDeviceIds.set(this, id);
@@ -300,6 +321,8 @@ export class SerialPort extends EventTarget {
    * After this, a later open() (e.g. when the device is re-attached) succeeds.
    */
   #handleDeviceLost(): void {
+    const wasForgotten = this.#state === 'forgotten';
+
     // Reject any in-flight read/write with a "NetworkError" (per spec), erroring
     // the stream controllers directly. We must NOT cancel()/abort() the streams:
     // cancel() rejects on a reader-locked stream (leaving the read orphaned) and
@@ -317,21 +340,7 @@ export class SerialPort extends EventTarget {
         this.#writableController?.error(lost);
       } catch {}
     }
-    this.#dataSubscription?.remove();
-    this.#errorSubscription?.remove();
-    this.#dataSubscription = null;
-    this.#errorSubscription = null;
-    this.#readableController = null;
-    this.#writableController = null;
-
-    this.#readable = null;
-    this.#writable = null;
-    this.#readFatal = false;
-    this.#writeFatal = false;
-    this.#pendingClosePromise = null;
-    this.#bufferSize = undefined;
-    this.#state = 'closed';
-    this.#connected = false;
+    this.#resetToClosedState(wasForgotten ? 'forgotten' : 'closed');
 
     this.dispatchEvent(new Event('disconnect'));
   }
@@ -567,7 +576,7 @@ export class SerialPort extends EventTarget {
 
     // 3. If options["baudRate"] is 0, reject promise with a TypeError and
     // return promise.
-    if (options.baudRate === 0) {
+    if (!Number.isFinite(options.baudRate) || options.baudRate <= 0) {
       throw new TypeError('baudRate must be a positive, non-zero value.');
     }
 
@@ -588,7 +597,7 @@ export class SerialPort extends EventTarget {
     // 6. If options["bufferSize"] is 0, reject promise with a TypeError and
     // return promise.
     const bufferSize = options.bufferSize ?? kDefaultBufferSize;
-    if (bufferSize === 0) {
+    if (!Number.isFinite(bufferSize) || bufferSize <= 0) {
       throw new TypeError('bufferSize must be a positive, non-zero value.');
     }
 
@@ -600,6 +609,11 @@ export class SerialPort extends EventTarget {
     }
 
     const flowControl = options.flowControl ?? kDefaultFlowControl;
+    if (!kAcceptableFlowControl.includes(flowControl)) {
+      throw new TypeError(
+        `flowControl must be one of: ${kAcceptableFlowControl.join(', ')}.`,
+      );
+    }
 
     // 8. Set this.[[state]] to "opening".
     this.#state = 'opening';
@@ -625,18 +639,35 @@ export class SerialPort extends EventTarget {
       );
     }
 
-    if (flowControl !== 'none') {
-      await this.#usb.setFlowControl(
-        this.#deviceId,
-        this.#portNumber,
-        flowControlToNative(flowControl),
+    try {
+      if (flowControl !== 'none') {
+        await this.#usb.setFlowControl(
+          this.#deviceId,
+          this.#portNumber,
+          flowControlToNative(flowControl),
+        );
+      }
+
+      await this.#usb.startReading(this.#deviceId, this.#portNumber);
+    } catch (e) {
+      // If post-open setup fails (flow-control/read pump), best-effort close
+      // and reset local state so a subsequent open() can succeed cleanly.
+      try {
+        await this.#usb.close(this.#deviceId, this.#portNumber);
+      } catch {
+        // ignore
+      }
+
+      this.#resetToClosedState();
+
+      throw new DOMException(
+        `Failed to open serial port: ${(e as Error).message}`,
+        'NetworkError',
       );
     }
 
     this.#state = 'opened'; // 9.3. Set this.[[state]] to "opened".
     this.#bufferSize = bufferSize; // 9.4. Set this.[[bufferSize]] to options["bufferSize"].
-
-    await this.#usb.startReading(this.#deviceId, this.#portNumber);
 
     // When the port becomes logically connected:
     this.#connected = true; // 2. Set port.[[connected]] to true.
@@ -702,20 +733,8 @@ export class SerialPort extends EventTarget {
       // ignore
     }
 
-    this.#dataSubscription?.remove();
-    this.#errorSubscription?.remove();
-    this.#dataSubscription = null;
-    this.#errorSubscription = null;
-    this.#readableController = null;
-    this.#writableController = null;
-
-    this.#state = 'closed'; // 10.1.2. Set this.[[state]] to "closed".
-    this.#readFatal = false; // 10.1.3. Set this.[[readFatal]] and this.[[writeFatal]] to false.
-    this.#writeFatal = false; // 10.1.3. (continued)
-    this.#pendingClosePromise = null; // 10.1.4. Set this.[[pendingClosePromise]] to null.
-
-    // When the port is no longer logically connected:
-    this.#connected = false; // 2. Set port.[[connected]] to false.
+    // 10.1.2-10.1.4 and logical disconnect bookkeeping.
+    this.#resetToClosedState();
     // (No port-level "disconnect" dispatch here — that event signals physical
     // detach, fired by Serial from the native USB state events. See open().)
   }
@@ -725,6 +744,12 @@ export class SerialPort extends EventTarget {
    */
   async forget(): Promise<void> {
     // The forget() method steps are:
+
+    // Forgetting an open port must not leave active streams/native resources
+    // behind. Close first so the instance becomes cleanly unusable afterwards.
+    if (this.#state === 'opened') {
+      await this.close();
+    }
 
     // 2.1. Set this.[[state]] to "forgetting".
     this.#state = 'forgetting';
@@ -946,14 +971,22 @@ export class Serial extends EventTarget {
       // VID/PID, update their deviceId, re-key them, and fire "connect" on the
       // same SerialPort instance (W3C spec model: the port is reused).
       this.#usb.onConnect((event: ConnectEvent) => {
-        let matched = false;
-        const entries = Array.from(this.#knownPorts.entries());
-        for (let i = 0; i < entries.length; i++) {
-          const [key, port] = entries[i];
-          const internals = portInternals.get(port)!;
-          if (internals.getVid() !== event.usbVendorId) continue;
-          if (internals.getPid() !== event.usbProductId) continue;
+        // Native connect events expose VID/PID but not a stable unique
+        // identifier. To avoid mis-associating identical devices, remap only
+        // when there is exactly one disconnected candidate.
+        const candidates = Array.from(this.#knownPorts.entries()).filter(
+          ([, port]) => {
+            const internals = portInternals.get(port)!;
+            if (internals.getVid() !== event.usbVendorId) return false;
+            if (internals.getPid() !== event.usbProductId) return false;
+            if (internals.isForgotten()) return false;
+            return !port.connected;
+          },
+        );
 
+        if (candidates.length === 1) {
+          const [key, port] = candidates[0];
+          const internals = portInternals.get(port)!;
           internals.setDeviceId(event.deviceId);
           const newKey = this.#portKey(
             event.deviceId,
@@ -964,11 +997,12 @@ export class Serial extends EventTarget {
           // Dispatched on the port; it bubbles to this Serial (event.target
           // stays the port, per spec — see setEventParent below).
           port.dispatchEvent(new Event('connect'));
-          matched = true;
+          return;
         }
-        // No known port matched: a brand-new device. Fire a Serial-level
+
+        // No known port matched (or matching is ambiguous): fire a Serial-level
         // "connect" so listeners refresh; getPorts() surfaces the new port.
-        if (!matched) this.dispatchEvent(new Event('connect'));
+        this.dispatchEvent(new Event('connect'));
       });
 
       // A USB device was detached. Reset the matching port(s) to a closed,
@@ -1066,7 +1100,8 @@ export class Serial extends EventTarget {
     } of portIds) {
       if (!hasPermission) continue;
       const key = this.#portKey(deviceId, portNumber);
-      if (!this.#knownPorts.has(key)) {
+      const known = this.#knownPorts.get(key);
+      if (!known || portInternals.get(known)?.isForgotten()) {
         const port = new SerialPort(
           usb,
           deviceId,
@@ -1098,6 +1133,12 @@ export class Serial extends EventTarget {
       throw new DOMException(
         'NativeUsbSerial is not available.',
         'NotFoundError',
+      );
+    }
+
+    if ((options.allowedBluetoothServiceClassIds?.length ?? 0) > 0) {
+      throw new TypeError(
+        'allowedBluetoothServiceClassIds is not supported in Android USB mode.',
       );
     }
 
@@ -1148,7 +1189,8 @@ export class Serial extends EventTarget {
 
     // 5.6. Let port be a SerialPort representing the port chosen by the user.
     const key = `${portId.deviceId}:${portId.portNumber}`;
-    if (!this.#knownPorts.has(key)) {
+    const known = this.#knownPorts.get(key);
+    if (!known || portInternals.get(known)?.isForgotten()) {
       const port = new SerialPort(
         usb,
         portId.deviceId,

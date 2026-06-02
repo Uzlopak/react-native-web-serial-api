@@ -9,6 +9,7 @@ import {
   type SerialDevice,
   SilentDevice,
 } from '../testing/serial-device';
+import type {Event} from '../lib/event-target';
 import type {SerialTransport} from '../transport';
 import {VirtualSerialTransport} from '../testing/virtual-serial';
 import {Serial, SerialPort} from '../WebSerial';
@@ -89,12 +90,65 @@ describe('SerialPort.open()', () => {
     });
   });
 
+  it('forget() closes an open port before marking it forgotten', async () => {
+    const {serial} = setup(new SilentDevice(FTDI));
+    const [port] = await serial.getPorts();
+
+    await port.open({baudRate: 9600});
+    expect(port.connected).toBe(true);
+    expect(port.readable).not.toBeNull();
+    expect(port.writable).not.toBeNull();
+
+    await port.forget();
+
+    expect(port.connected).toBe(false);
+    expect(port.readable).toBeNull();
+    expect(port.writable).toBeNull();
+
+    await expect(port.open({baudRate: 9600})).rejects.toMatchObject({
+      name: 'InvalidStateError',
+    });
+    await expect(port.close()).rejects.toMatchObject({
+      name: 'InvalidStateError',
+    });
+  });
+
   it('rejects zero bufferSize', async () => {
     const {serial} = setup();
     const [port] = await serial.getPorts();
 
     await expect(
       port.open({baudRate: 9600, bufferSize: 0}),
+    ).rejects.toThrow('bufferSize must be a positive, non-zero value.');
+  });
+
+  it('rejects negative baudRate and negative bufferSize', async () => {
+    const {serial} = setup();
+    const [port] = await serial.getPorts();
+
+    await expect(port.open({baudRate: -1})).rejects.toThrow(
+      'baudRate must be a positive, non-zero value.',
+    );
+    await expect(
+      port.open({baudRate: 9600, bufferSize: -1}),
+    ).rejects.toThrow('bufferSize must be a positive, non-zero value.');
+  });
+
+  it('rejects non-finite baudRate and non-finite bufferSize', async () => {
+    const {serial} = setup();
+    const [port] = await serial.getPorts();
+
+    await expect(port.open({baudRate: Number.NaN})).rejects.toThrow(
+      'baudRate must be a positive, non-zero value.',
+    );
+    await expect(port.open({baudRate: Number.POSITIVE_INFINITY})).rejects.toThrow(
+      'baudRate must be a positive, non-zero value.',
+    );
+    await expect(
+      port.open({baudRate: 9600, bufferSize: Number.NaN}),
+    ).rejects.toThrow('bufferSize must be a positive, non-zero value.');
+    await expect(
+      port.open({baudRate: 9600, bufferSize: Number.POSITIVE_INFINITY}),
     ).rejects.toThrow('bufferSize must be a positive, non-zero value.');
   });
 
@@ -105,6 +159,15 @@ describe('SerialPort.open()', () => {
     await expect(
       port.open({baudRate: 9600, parity: 'mark' as unknown as 'none'}),
     ).rejects.toThrow('parity must be one of: none, even, odd.');
+  });
+
+  it('rejects invalid flowControl values', async () => {
+    const {serial} = setup();
+    const [port] = await serial.getPorts();
+
+    await expect(
+      port.open({baudRate: 9600, flowControl: 'software' as never}),
+    ).rejects.toThrow('flowControl must be one of: none, hardware.');
   });
 
   it('wraps native open failures and remains re-openable afterwards', async () => {
@@ -128,6 +191,36 @@ describe('SerialPort.open()', () => {
     await port.open({baudRate: 9600, parity: 'odd'});
 
     expect(device.openOptions?.parity).toBe(1);
+    await port.close();
+  });
+
+  it('wraps flow-control setup failures and remains re-openable afterwards', async () => {
+    const {serial, transport} = setup();
+    const [port] = await serial.getPorts();
+
+    jest
+      .spyOn(transport, 'setFlowControl')
+      .mockRejectedValueOnce(new Error('flow-control failed'));
+
+    await expect(
+      port.open({baudRate: 9600, flowControl: 'hardware'}),
+    ).rejects.toMatchObject({name: 'NetworkError'});
+
+    await expect(port.open({baudRate: 9600})).resolves.toBeUndefined();
+    await port.close();
+  });
+
+  it('wraps startReading failures and remains re-openable afterwards', async () => {
+    const {serial, device} = setup();
+    const [port] = await serial.getPorts();
+
+    device.failNext('startReading');
+
+    await expect(port.open({baudRate: 9600})).rejects.toMatchObject({
+      name: 'NetworkError',
+    });
+
+    await expect(port.open({baudRate: 9600})).resolves.toBeUndefined();
     await port.close();
   });
 });
@@ -344,19 +437,31 @@ describe('SerialPort streams', () => {
 describe('Serial connect/disconnect events', () => {
   it('fires the onconnect property handler when a device is (re)attached', () => {
     const {serial, transport, device} = setup();
+    let seenEvent: Event | undefined;
     const onconnect = jest.fn();
-    serial.onconnect = onconnect;
+    serial.onconnect = event => {
+      seenEvent = event as unknown as Event;
+      onconnect(event);
+    };
     transport.detach(device);
     transport.attach(device);
-    expect(onconnect).toHaveBeenCalled();
+    expect(onconnect).toHaveBeenCalledTimes(1);
+    expect(seenEvent?.type).toBe('connect');
+    expect(seenEvent?.target).toBe(serial);
   });
 
   it('fires the ondisconnect property handler when a device is detached', () => {
     const {serial, transport, device} = setup();
+    let seenEvent: Event | undefined;
     const ondisconnect = jest.fn();
-    serial.ondisconnect = ondisconnect;
+    serial.ondisconnect = event => {
+      seenEvent = event as unknown as Event;
+      ondisconnect(event);
+    };
     transport.detach(device);
-    expect(ondisconnect).toHaveBeenCalled();
+    expect(ondisconnect).toHaveBeenCalledTimes(1);
+    expect(seenEvent?.type).toBe('disconnect');
+    expect(seenEvent?.target).toBe(serial);
   });
 
   it('replaces existing onconnect handler and supports clearing it', () => {
@@ -472,6 +577,94 @@ describe('Serial connect/disconnect events', () => {
 
     expect(connectSpy).toHaveBeenCalled();
   });
+
+  it('does not remap an ambiguous attach when multiple disconnected ports share VID/PID', async () => {
+    const transport = new VirtualSerialTransport();
+    const a = transport.addDevice(new EchoDevice(FTDI), {hasPermission: true});
+    const b = transport.addDevice(new EchoDevice(FTDI), {hasPermission: true});
+    const serial = new Serial(transport);
+    const ports = await serial.getPorts();
+    expect(ports).toHaveLength(2);
+
+    const portConnectA = jest.fn();
+    const portConnectB = jest.fn();
+    const serialConnect = jest.fn();
+    ports[0].addEventListener('connect', portConnectA);
+    ports[1].addEventListener('connect', portConnectB);
+    serial.onconnect = serialConnect;
+
+    a.detach();
+    b.detach();
+    portConnectA.mockClear();
+    portConnectB.mockClear();
+    serialConnect.mockClear();
+
+    a.attach();
+
+    expect(portConnectA).not.toHaveBeenCalled();
+    expect(portConnectB).not.toHaveBeenCalled();
+    expect(serialConnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not remap forgotten ports on attach, and surfaces serial-level connect', async () => {
+    const {serial, transport, device} = setup();
+    const [port] = await serial.getPorts();
+
+    const portConnect = jest.fn();
+    const serialConnect = jest.fn();
+    port.onconnect = portConnect;
+    serial.onconnect = serialConnect;
+
+    await port.forget();
+    transport.detach(device);
+    portConnect.mockClear();
+    serialConnect.mockClear();
+
+    transport.attach(device);
+
+    expect(portConnect).not.toHaveBeenCalled();
+    expect(serialConnect).toHaveBeenCalledTimes(1);
+
+    const [reacquired] = await serial.getPorts();
+    expect(reacquired).not.toBe(port);
+  });
+
+  it('bubbles connect to serial with target set to the known port', async () => {
+    const {serial, transport, device} = setup();
+    const [port] = await serial.getPorts();
+
+    let seenEvent: Event | undefined;
+    const onconnect = jest.fn();
+    serial.onconnect = event => {
+      seenEvent = event;
+      onconnect(event);
+    };
+
+    transport.detach(device);
+    transport.attach(device);
+
+    expect(onconnect).toHaveBeenCalledTimes(1);
+    expect(seenEvent?.type).toBe('connect');
+    expect(seenEvent?.target).toBe(port);
+  });
+
+  it('bubbles disconnect to serial with target set to the known port', async () => {
+    const {serial, transport, device} = setup();
+    const [port] = await serial.getPorts();
+
+    let seenEvent: Event | undefined;
+    const ondisconnect = jest.fn();
+    serial.ondisconnect = event => {
+      seenEvent = event;
+      ondisconnect(event);
+    };
+
+    transport.detach(device);
+
+    expect(ondisconnect).toHaveBeenCalledTimes(1);
+    expect(seenEvent?.type).toBe('disconnect');
+    expect(seenEvent?.target).toBe(port);
+  });
 });
 
 describe('SerialPort connect/disconnect event handlers', () => {
@@ -572,6 +765,14 @@ describe('Serial.requestPort()', () => {
     );
   });
 
+  it('rejects an empty filter object', async () => {
+    const {serial} = setup();
+
+    await expect(serial.requestPort({filters: [{}]})).rejects.toThrow(
+      'A filter must specify usbVendorId if usbProductId is specified, or must not be empty.',
+    );
+  });
+
   it('passes only USB filters to the native picker', async () => {
     const {serial, transport} = setup();
     const pickerSpy = jest.spyOn(transport, 'showPortPicker');
@@ -588,12 +789,38 @@ describe('Serial.requestPort()', () => {
     ]);
   });
 
+  it('rejects allowedBluetoothServiceClassIds in Android USB mode', async () => {
+    const {serial} = setup();
+
+    await expect(
+      serial.requestPort({allowedBluetoothServiceClassIds: [0x1101]}),
+    ).rejects.toThrow(
+      'allowedBluetoothServiceClassIds is not supported in Android USB mode.',
+    );
+  });
+
   it('reuses an existing known port when the same port is picked again', async () => {
     const {serial} = setup();
     const first = await serial.requestPort();
     const second = await serial.requestPort();
 
     expect(second).toBe(first);
+  });
+
+  it('returns a fresh openable port after the previous instance was forgotten', async () => {
+    const {serial} = setup();
+    const first = await serial.requestPort();
+
+    await first.forget();
+    await expect(first.open({baudRate: 9600})).rejects.toMatchObject({
+      name: 'InvalidStateError',
+    });
+
+    const second = await serial.requestPort();
+    expect(second).not.toBe(first);
+
+    await expect(second.open({baudRate: 9600})).resolves.toBeUndefined();
+    await second.close();
   });
 });
 

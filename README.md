@@ -70,6 +70,9 @@ async function run() {
 }
 ```
 
+In Android USB mode, `allowedBluetoothServiceClassIds` is not supported by
+`requestPort()` and will throw a `TypeError` if provided.
+
 ### Control & status signals
 
 ```ts
