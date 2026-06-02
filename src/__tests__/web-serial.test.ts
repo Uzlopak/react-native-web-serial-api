@@ -303,6 +303,34 @@ describe('SerialPort.open()', () => {
     expect(port.readable).toBeNull();
     expect(port.writable).toBeNull();
   });
+
+  it('keeps forgotten state when startReading fails after forget() during open()', async () => {
+    const {serial, transport} = setup(new SilentDevice(FTDI));
+    const [port] = await serial.getPorts();
+
+    let releaseStartReading: () => void = () => {
+      throw new Error('startReading gate resolver not initialized');
+    };
+    const startReadingGate = new Promise<void>(resolve => {
+      releaseStartReading = () => resolve();
+    });
+
+    jest.spyOn(transport, 'startReading').mockImplementationOnce(async () => {
+      await startReadingGate;
+      throw new Error('startReading failed after forget');
+    });
+
+    const opening = port.open({baudRate: 9600});
+    await Promise.resolve(); // let open() enter the "opening" state
+
+    await port.forget();
+    releaseStartReading();
+
+    await expect(opening).rejects.toMatchObject({name: 'NetworkError'});
+    await expect(port.open({baudRate: 9600})).rejects.toMatchObject({
+      name: 'InvalidStateError',
+    });
+  });
 });
 
 describe('SerialPort signals', () => {

@@ -662,7 +662,7 @@ export class SerialPort extends EventTarget {
         // ignore
       }
 
-      this.#resetToClosedState();
+      this.#resetToClosedState(this.#forgetRequested ? 'forgotten' : 'closed');
 
       throw new DOMException(
         `Failed to open serial port: ${(e as Error).message}`,
