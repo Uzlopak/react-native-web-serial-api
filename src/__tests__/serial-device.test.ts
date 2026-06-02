@@ -25,6 +25,27 @@ async function mount(device: SerialDevice) {
 }
 
 describe('SerialDevice', () => {
+  it('returns fallback values from protected getters before binding', () => {
+    class Probe extends SerialDevice {
+      readonly usbVendorId = 1;
+      readonly usbProductId = 2;
+      inspect() {
+        return {
+          openOptions: this.openOptions,
+          deviceId: this.deviceId,
+          portNumber: this.portNumber,
+        };
+      }
+    }
+
+    const probe = new Probe();
+    expect(probe.inspect()).toEqual({
+      openOptions: null,
+      deviceId: -1,
+      portNumber: 0,
+    });
+  });
+
   it('EchoDevice round-trips bytes', async () => {
     const {port} = await mount(new EchoDevice());
     await port.open({baudRate: 115200});

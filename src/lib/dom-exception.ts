@@ -213,4 +213,8 @@ export {
   DOM_EXCEPTION_CODES,
   DOM_EXCEPTION_NAMES,
   DOMExceptionImpl as DOMException,
+  // Exported for testing: in environments that already provide a global
+  // DOMException (Node, modern browsers) the export above is the native one, so
+  // the polyfill class would otherwise never run.
+  DOMExceptionPolyfill,
 };

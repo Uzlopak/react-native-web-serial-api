@@ -56,11 +56,11 @@ describe('WPT: serialPort_loopback typed read errors', () => {
     // Read concurrently so the first 1024 bytes arrive before the overrun error.
     const reader = port.readable!.getReader();
     const writer = port.writable!.getWriter();
+    const writePromise = writer.write(data);
 
     let actualLength = 0;
     let caught: unknown;
     try {
-      writer.write(data);
       while (true) {
         const {value, done} = await reader.read();
         if (value) actualLength += value.byteLength;
@@ -69,6 +69,8 @@ describe('WPT: serialPort_loopback typed read errors', () => {
     } catch (e) {
       caught = e;
     }
+
+    await expect(writePromise).resolves.toBeUndefined();
 
     expect(actualLength).toBeGreaterThan(0); // partial data is received...
     expectDOMException(caught, 'BufferOverrunError'); // ...then impl: NetworkError

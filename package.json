@@ -28,7 +28,8 @@
     "lint": "biome check src",
     "format": "biome check --write src",
     "test": "jest",
-    "test:watch": "jest --watch"
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage"
   },
   "keywords": [
     "react-native",

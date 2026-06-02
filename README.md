@@ -198,14 +198,19 @@ The hardware layer sits behind a single injectable `SerialTransport` interface, 
 
 ```ts
 import {Serial} from 'react-native-web-serial-api';
-import {VirtualSerialTransport} from 'react-native-web-serial-api/testing';
+import {VirtualSerialTransport, EchoDevice} from 'react-native-web-serial-api/testing';
 
 const transport = new VirtualSerialTransport();
-transport.addDevice({usbVendorId: 0x0403, usbProductId: 0x6001, hasPermission: true});
+transport.addDevice(new EchoDevice(), {hasPermission: true});
 const serial = new Serial(transport); // no native module, no hardware
 ```
 
-See **[TESTING.md](TESTING.md)** for the full guide.
+```sh
+npm test               # unit + WPT conformance suites
+npm run test:coverage  # coverage report (HTML in coverage/lcov-report)
+```
+
+See **[TESTING.md](TESTING.md)** for the full guide (authoring a `SerialDevice`, the conformance/WPT suites, on-device E2E, and coverage).
 
 ## License
 

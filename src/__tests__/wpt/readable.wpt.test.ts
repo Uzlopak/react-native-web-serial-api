@@ -52,7 +52,7 @@ describe('WPT: serialPort_readable', () => {
     config.setUint32(4, length, /*littleEndian=*/ true);
 
     const writer = port.writable!.getWriter();
-    writer.write(new Uint8Array(config.buffer));
+    const writePromise = writer.write(new Uint8Array(config.buffer));
 
     const reader = port.readable!.getReader();
     const next = makePrng(seed);
@@ -73,6 +73,7 @@ describe('WPT: serialPort_readable', () => {
     }
 
     expect(bytesRead).toBe(length);
+    await writePromise;
     writer.releaseLock();
     reader.releaseLock();
     await port.close();

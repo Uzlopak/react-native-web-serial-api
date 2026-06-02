@@ -337,7 +337,11 @@ export const serialConformanceTests: ConformanceTest[] = [
       });
       transport.detach(device);
       transport.attach(device); // fresh deviceId, fires "connect"
-      assert(connects >= 1, 'the port should receive a "connect" on re-attach');
+      assertEqual(
+        connects,
+        1,
+        'the port should receive exactly one "connect" on re-attach',
+      );
       const [again] = await serial.getPorts();
       assert(again === port, 'the same SerialPort instance must be reused');
       await again.open({baudRate: 9600});
@@ -358,7 +362,11 @@ export const serialConformanceTests: ConformanceTest[] = [
         disconnects++;
       });
       transport.detach(device);
-      assert(disconnects >= 1, 'the port should receive a "disconnect"');
+      assertEqual(
+        disconnects,
+        1,
+        'the port should receive exactly one "disconnect" on detach',
+      );
       assert(!port.connected, 'the port should no longer be connected');
       assertEqual(port.readable, null, 'readable should reset to null');
     },

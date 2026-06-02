@@ -18,4 +18,12 @@ module.exports = {
     '^react-native$': '<rootDir>/node_modules/react-native',
     '^react$': '<rootDir>/node_modules/react',
   },
+  // Coverage (run with `npm run test:coverage`). Collects from all of src so
+  // unexercised files still show up. Note: the native bridge (NativeUsbSerial*)
+  // and the on-device parts of UsbSerial.ts only run on a real device, so they
+  // read low here — that's expected; the W3C polyfill in WebSerial.ts is the
+  // number to watch.
+  collectCoverageFrom: ['src/**/*.ts', '!src/**/*.test.ts', '!src/__tests__/**'],
+  coverageDirectory: '<rootDir>/coverage',
+  coverageReporters: ['text', 'text-summary', 'lcov'],
 };

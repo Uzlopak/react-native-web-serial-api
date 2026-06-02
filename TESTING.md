@@ -266,7 +266,8 @@ the mock is what makes either runner hardware-free.
 ## Running the tests
 
 ```sh
-npm test           # library unit + conformance suite
+npm test            # library unit + conformance suite
+npm run test:watch  # watch mode
 npm run typecheck
 npm run lint
 
@@ -275,3 +276,12 @@ npm test --prefix example   # example app tests
 
 CI runs all of the above plus a build check on every push/PR — see
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
+## Coverage
+
+```sh
+npm run test:coverage
+```
+
+Prints a per-file table + summary and writes a browsable HTML report to
+`coverage/lcov-report/index.html` (config in [`jest.config.js`](jest.config.js)).

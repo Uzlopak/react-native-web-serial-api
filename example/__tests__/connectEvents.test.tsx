@@ -64,6 +64,12 @@ it('addEventListener("connect") receives native events without calling getPorts(
   });
 
   expect(onConnect).toHaveBeenCalledTimes(1);
+  const event = onConnect.mock.calls[0][0] as {
+    type?: string;
+    target?: unknown;
+  };
+  expect(event.type).toBe('connect');
+  expect(event.target).toBe(serial);
 });
 
 it('forwards native disconnect to Serial listeners', () => {
@@ -78,4 +84,10 @@ it('forwards native disconnect to Serial listeners', () => {
   });
 
   expect(onDisconnect).toHaveBeenCalledTimes(1);
+  const event = onDisconnect.mock.calls[0][0] as {
+    type?: string;
+    target?: unknown;
+  };
+  expect(event.type).toBe('disconnect');
+  expect(event.target).toBe(serial);
 });

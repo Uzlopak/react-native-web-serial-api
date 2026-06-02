@@ -20,7 +20,7 @@ describe('WPT: serialPort_loopback', () => {
     const reader = port.readable!.getReader();
     for (let i = 0; i < 10; ++i) {
       const writer = port.writable!.getWriter();
-      writer.write(data);
+      await writer.write(data);
       const writePromise = writer.close();
 
       const value = await readWithLength(reader, data.byteLength);
@@ -43,7 +43,7 @@ describe('WPT: serialPort_loopback', () => {
     const reader = port.readable!.getReader();
     for (let i = 0; i < 10; ++i) {
       const writer = port.writable!.getWriter();
-      writer.write(data);
+      await writer.write(data);
       const writePromise = writer.close();
 
       const value = await readWithLength(reader, data.byteLength);

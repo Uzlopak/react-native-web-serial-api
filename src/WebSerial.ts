@@ -171,7 +171,6 @@ type PortInternals = {
   getVid(): number | undefined;
   getPid(): number | undefined;
   getPortNumber(): number;
-  getDeviceId(): number;
   setDeviceId(id: number): void;
   /** Reset to a closed, re-openable state after the device is physically lost. */
   handleDeviceLost(): void;
@@ -199,8 +198,13 @@ function parityToNative(parity: ParityType): number {
   }
 }
 
+const FLOW_CONTROL_NATIVE: Readonly<Record<FlowControlType, 'RTS_CTS' | 'NONE'>> = {
+  none: 'NONE',
+  hardware: 'RTS_CTS',
+};
+
 function flowControlToNative(flowControl: FlowControlType): 'RTS_CTS' | 'NONE' {
-  return flowControl === 'hardware' ? 'RTS_CTS' : 'NONE';
+  return FLOW_CONTROL_NATIVE[flowControl];
 }
 
 /**
@@ -281,7 +285,6 @@ export class SerialPort extends EventTarget {
       getVid: () => this.#usbVendorId,
       getPid: () => this.#usbProductId,
       getPortNumber: () => this.#portNumber,
-      getDeviceId: () => this.#deviceId,
       setDeviceId: (id: number) => {
         this.#deviceId = id;
         serialPortDeviceIds.set(this, id);
@@ -944,27 +947,24 @@ export class Serial extends EventTarget {
       // same SerialPort instance (W3C spec model: the port is reused).
       this.#usb.onConnect((event: ConnectEvent) => {
         let matched = false;
-        for (const [key, port] of [...this.#knownPorts.entries()]) {
-          const internals = portInternals.get(port);
-          if (!internals) continue;
-          if (
-            internals.getVid() === event.usbVendorId &&
-            internals.getPid() === event.usbProductId
-          ) {
-            internals.setDeviceId(event.deviceId);
-            const newKey = this.#portKey(
-              event.deviceId,
-              internals.getPortNumber(),
-            );
-            if (newKey !== key) {
-              this.#knownPorts.delete(key);
-              this.#knownPorts.set(newKey, port);
-            }
-            // Dispatched on the port; it bubbles to this Serial (event.target
-            // stays the port, per spec — see setEventParent below).
-            port.dispatchEvent(new Event('connect'));
-            matched = true;
-          }
+        const entries = Array.from(this.#knownPorts.entries());
+        for (let i = 0; i < entries.length; i++) {
+          const [key, port] = entries[i];
+          const internals = portInternals.get(port)!;
+          if (internals.getVid() !== event.usbVendorId) continue;
+          if (internals.getPid() !== event.usbProductId) continue;
+
+          internals.setDeviceId(event.deviceId);
+          const newKey = this.#portKey(
+            event.deviceId,
+            internals.getPortNumber(),
+          );
+          this.#knownPorts.delete(key);
+          this.#knownPorts.set(newKey, port);
+          // Dispatched on the port; it bubbles to this Serial (event.target
+          // stays the port, per spec — see setEventParent below).
+          port.dispatchEvent(new Event('connect'));
+          matched = true;
         }
         // No known port matched: a brand-new device. Fire a Serial-level
         // "connect" so listeners refresh; getPorts() surfaces the new port.

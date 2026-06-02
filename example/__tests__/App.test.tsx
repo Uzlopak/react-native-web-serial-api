@@ -12,5 +12,5 @@ it('renders the devices screen', async () => {
   expect(screen.getByText('USB Devices')).toBeTruthy();
   // DevicesScreen kicks off an async serial.getPorts() refresh on mount; let it
   // settle so the state update is wrapped in act() (avoids a console warning).
-  await waitFor(() => expect(screen.queryByText('USB Devices')).toBeTruthy());
+  await waitFor(() => expect(screen.getByText('<no USB devices found>')).toBeTruthy());
 });
