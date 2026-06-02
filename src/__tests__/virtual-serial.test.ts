@@ -186,14 +186,24 @@ describe('VirtualSerialTransport: device handle', () => {
     }
 
     const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new SignalsOnOpen(), {hasPermission: true});
+    const device = transport.addDevice(new SignalsOnOpen(), {
+      hasPermission: true,
+    });
 
     await transport.open(device.deviceId, device.portNumber, {baudRate: 9600});
 
-    await expect(transport.getCD(device.deviceId, device.portNumber)).resolves.toBe(true);
-    await expect(transport.getCTS(device.deviceId, device.portNumber)).resolves.toBe(true);
-    await expect(transport.getRI(device.deviceId, device.portNumber)).resolves.toBe(true);
-    await expect(transport.getDSR(device.deviceId, device.portNumber)).resolves.toBe(true);
+    await expect(
+      transport.getCD(device.deviceId, device.portNumber),
+    ).resolves.toBe(true);
+    await expect(
+      transport.getCTS(device.deviceId, device.portNumber),
+    ).resolves.toBe(true);
+    await expect(
+      transport.getRI(device.deviceId, device.portNumber),
+    ).resolves.toBe(true);
+    await expect(
+      transport.getDSR(device.deviceId, device.portNumber),
+    ).resolves.toBe(true);
   });
 
   it('maps partial input signals without touching omitted fields', async () => {
@@ -206,7 +216,9 @@ describe('VirtualSerialTransport: device handle', () => {
     }
 
     const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new PartialSignals(), {hasPermission: true});
+    const device = transport.addDevice(new PartialSignals(), {
+      hasPermission: true,
+    });
     const {deviceId: id, portNumber: p} = device;
 
     await transport.open(id, p, {baudRate: 9600});
@@ -225,7 +237,9 @@ describe('VirtualSerialTransport: device handle', () => {
     }
 
     const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new RingOnlySignals(), {hasPermission: true});
+    const device = transport.addDevice(new RingOnlySignals(), {
+      hasPermission: true,
+    });
     const {deviceId: id, portNumber: p} = device;
 
     await transport.open(id, p, {baudRate: 9600});
@@ -260,7 +274,9 @@ describe('VirtualSerialTransport: device handle', () => {
 describe('VirtualSerialTransport: picker, timing and subscriptions', () => {
   it('rejects picker when filters exclude all candidates', async () => {
     const transport = new VirtualSerialTransport();
-    transport.addDevice(new EchoDevice({usbVendorId: 0x1234, usbProductId: 0x0001}));
+    transport.addDevice(
+      new EchoDevice({usbVendorId: 0x1234, usbProductId: 0x0001}),
+    );
 
     await expect(
       transport.showPortPicker([{usbVendorId: 0x1234, usbProductId: 0x9999}]),
@@ -294,7 +310,9 @@ describe('VirtualSerialTransport: picker, timing and subscriptions', () => {
 
   it('does not auto-grant permission when configured off', async () => {
     const transport = new VirtualSerialTransport({autoGrantPermission: false});
-    const device = transport.addDevice(new EchoDevice(), {hasPermission: false});
+    const device = transport.addDevice(new EchoDevice(), {
+      hasPermission: false,
+    });
 
     await transport.showPortPicker([]);
     expect(device.hasPermission).toBe(false);
@@ -327,7 +345,9 @@ describe('VirtualSerialTransport: picker, timing and subscriptions', () => {
 
   it('writes reject while port is closed', async () => {
     const {transport, id, p} = opened();
-    await expect(transport.write(id, p, [1])).rejects.toThrow('Port is not open');
+    await expect(transport.write(id, p, [1])).rejects.toThrow(
+      'Port is not open',
+    );
   });
 
   it('handles unknown device ids with safe defaults', async () => {
@@ -342,7 +362,9 @@ describe('VirtualSerialTransport: picker, timing and subscriptions', () => {
       transport.setParameters(999, 0, {baudRate: 9600}),
     ).resolves.toBeUndefined();
     await expect(transport.setDTR(999, 0, true)).resolves.toBeUndefined();
-    await expect(transport.setFlowControl(999, 0, 'RTS_CTS')).resolves.toBeUndefined();
+    await expect(
+      transport.setFlowControl(999, 0, 'RTS_CTS'),
+    ).resolves.toBeUndefined();
     await expect(transport.getDTR(999, 0)).resolves.toBe(false);
     await expect(transport.getRTS(999, 0)).resolves.toBe(false);
     await expect(transport.getCD(999, 0)).resolves.toBe(false);
@@ -399,7 +421,9 @@ describe('VirtualSerialTransport: picker, timing and subscriptions', () => {
     device.detach();
     transport.selectNextPort(device);
 
-    await expect(transport.showPortPicker([])).rejects.toThrow('No port selected');
+    await expect(transport.showPortPicker([])).rejects.toThrow(
+      'No port selected',
+    );
   });
 
   it('accepts picker when selected target is still a candidate', async () => {
@@ -570,7 +594,9 @@ describe('VirtualSerialTransport: delivery and helper methods', () => {
     }
 
     const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new BridgeDevice(), {hasPermission: true});
+    const device = transport.addDevice(new BridgeDevice(), {
+      hasPermission: true,
+    });
     const {deviceId: id, portNumber: p} = device;
     const seenData: number[][] = [];
     const seenErrors: string[] = [];
@@ -641,9 +667,12 @@ describe('VirtualSerialTransport: delivery and helper methods', () => {
         deviceId: number;
         portNumber: number;
         isOpen: boolean;
-        openOptions:
-          | {baudRate: number; dataBits: number; stopBits: number; parity: number}
-          | null;
+        openOptions: {
+          baudRate: number;
+          dataBits: number;
+          stopBits: number;
+          parity: number;
+        } | null;
         send(bytes: number[]): void;
         raiseError(message: string, name?: string): void;
         setSignals(signals: Record<string, boolean>): void;

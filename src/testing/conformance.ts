@@ -239,8 +239,7 @@ export const serialConformanceTests: ConformanceTest[] = [
         {type: TypeError},
       );
       await assertRejects(
-        () =>
-          port.open({baudRate: 9600, bufferSize: -1} as SerialOptions),
+        () => port.open({baudRate: 9600, bufferSize: -1} as SerialOptions),
         'bufferSize -1',
         {type: TypeError},
       );

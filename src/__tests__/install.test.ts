@@ -71,6 +71,9 @@ describe('installSerialMock', () => {
     await new Promise(r => setTimeout(r, 5));
 
     // chunkSize=8 should split one push into two onData callbacks.
-    expect(seen).toEqual([[1, 2, 3, 4, 5, 6, 7, 8], [9, 10]]);
+    expect(seen).toEqual([
+      [1, 2, 3, 4, 5, 6, 7, 8],
+      [9, 10],
+    ]);
   });
 });

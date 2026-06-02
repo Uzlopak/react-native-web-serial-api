@@ -1,5 +1,4 @@
 import {describe, expect, it} from '@jest/globals';
-import {Serial} from '../WebSerial';
 import {
   runRealDeviceSmokeTest,
   runSerialConformance,
@@ -7,7 +6,7 @@ import {
 } from '../testing/conformance';
 import {EchoDevice} from '../testing/serial-device';
 import {VirtualSerialTransport} from '../testing/virtual-serial';
-import {SerialPort} from '../WebSerial';
+import {Serial, SerialPort} from '../WebSerial';
 
 describe('conformance runners and helper branches', () => {
   it('runSerialConformance returns passing results for the default suite', async () => {
@@ -38,7 +37,11 @@ describe('conformance runners and helper branches', () => {
       expect(failed?.passed).toBe(false);
       expect(failed?.error).toContain('boom-string');
     } finally {
-      serialConformanceTests.splice(0, serialConformanceTests.length, ...original);
+      serialConformanceTests.splice(
+        0,
+        serialConformanceTests.length,
+        ...original,
+      );
     }
   });
 
@@ -49,7 +52,9 @@ describe('conformance runners and helper branches', () => {
     try {
       const results = await runSerialConformance();
       const failed = results.find(r =>
-        r.name.includes('getPorts() lists only devices the app has permission for'),
+        r.name.includes(
+          'getPorts() lists only devices the app has permission for',
+        ),
       );
 
       expect(failed?.passed).toBe(false);
@@ -101,7 +106,9 @@ describe('conformance runners and helper branches', () => {
       );
 
       expect(nameMismatch?.passed).toBe(false);
-      expect(nameMismatch?.error).toContain('expected error "InvalidStateError"');
+      expect(nameMismatch?.error).toContain(
+        'expected error "InvalidStateError"',
+      );
 
       expect(typeMismatch?.passed).toBe(false);
       expect(typeMismatch?.error).toContain('expected a TypeError');
@@ -118,10 +125,10 @@ describe('conformance runners and helper branches', () => {
       'readable',
     );
 
-    const serialProto = (
+    const serialProto =
       // eslint-disable-next-line @typescript-eslint/no-var-requires
-      require('../WebSerial') as {Serial: {prototype: {requestPort: unknown}}}
-    ).Serial.prototype as {requestPort: () => Promise<unknown>};
+      (require('../WebSerial') as {Serial: {prototype: {requestPort: unknown}}})
+        .Serial.prototype as {requestPort: () => Promise<unknown>};
     const originalRequestPortFn = serialProto.requestPort;
 
     serialProto.requestPort = async () => ({fake: true});
@@ -144,14 +151,18 @@ describe('conformance runners and helper branches', () => {
     try {
       const results = await runSerialConformance();
       const noReject = results.find(r =>
-        r.name.includes('requestPort() rejects with NotFoundError when cancelled'),
+        r.name.includes(
+          'requestPort() rejects with NotFoundError when cancelled',
+        ),
       );
       const readDone = results.find(r =>
         r.name.includes('readable receives the bytes the device sends'),
       );
 
       expect(noReject?.passed).toBe(false);
-      expect(noReject?.error).toContain('expected a rejection but none occurred');
+      expect(noReject?.error).toContain(
+        'expected a rejection but none occurred',
+      );
 
       expect(readDone?.passed).toBe(false);
       expect(readDone?.error).toContain('echo mismatch');

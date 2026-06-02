@@ -29,7 +29,9 @@
     "format": "biome check --write src",
     "test": "jest",
     "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage"
+    "test:coverage": "jest --coverage",
+    "test:emulator:e2e": "npm --prefix example run e2e",
+    "test:host+emulator": "node ./node_modules/jest/bin/jest.js && npm --prefix example run e2e"
   },
   "keywords": [
     "react-native",

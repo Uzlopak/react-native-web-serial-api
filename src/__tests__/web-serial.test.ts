@@ -4,14 +4,14 @@
  * These complement the shared conformance suite with finer-grained assertions.
  */
 import {describe, expect, it, jest} from '@jest/globals';
+import type {Event} from '../lib/event-target';
 import {
   EchoDevice,
   type SerialDevice,
   SilentDevice,
 } from '../testing/serial-device';
-import type {Event} from '../lib/event-target';
-import type {SerialTransport} from '../transport';
 import {VirtualSerialTransport} from '../testing/virtual-serial';
+import type {SerialTransport} from '../transport';
 import {Serial, SerialPort} from '../WebSerial';
 
 const FTDI = {usbVendorId: 0x0403, usbProductId: 0x6001} as const;
@@ -117,9 +117,9 @@ describe('SerialPort.open()', () => {
     const {serial} = setup();
     const [port] = await serial.getPorts();
 
-    await expect(
-      port.open({baudRate: 9600, bufferSize: 0}),
-    ).rejects.toThrow('bufferSize must be a positive, non-zero value.');
+    await expect(port.open({baudRate: 9600, bufferSize: 0})).rejects.toThrow(
+      'bufferSize must be a positive, non-zero value.',
+    );
   });
 
   it('rejects negative baudRate and negative bufferSize', async () => {
@@ -129,9 +129,9 @@ describe('SerialPort.open()', () => {
     await expect(port.open({baudRate: -1})).rejects.toThrow(
       'baudRate must be a positive, non-zero value.',
     );
-    await expect(
-      port.open({baudRate: 9600, bufferSize: -1}),
-    ).rejects.toThrow('bufferSize must be a positive, non-zero value.');
+    await expect(port.open({baudRate: 9600, bufferSize: -1})).rejects.toThrow(
+      'bufferSize must be a positive, non-zero value.',
+    );
   });
 
   it('rejects non-finite baudRate and non-finite bufferSize', async () => {
@@ -141,9 +141,9 @@ describe('SerialPort.open()', () => {
     await expect(port.open({baudRate: Number.NaN})).rejects.toThrow(
       'baudRate must be a positive, non-zero value.',
     );
-    await expect(port.open({baudRate: Number.POSITIVE_INFINITY})).rejects.toThrow(
-      'baudRate must be a positive, non-zero value.',
-    );
+    await expect(
+      port.open({baudRate: Number.POSITIVE_INFINITY}),
+    ).rejects.toThrow('baudRate must be a positive, non-zero value.');
     await expect(
       port.open({baudRate: 9600, bufferSize: Number.NaN}),
     ).rejects.toThrow('bufferSize must be a positive, non-zero value.');
@@ -223,6 +223,86 @@ describe('SerialPort.open()', () => {
     await expect(port.open({baudRate: 9600})).resolves.toBeUndefined();
     await port.close();
   });
+
+  it('does not revive a port if forget() is called while open() is in flight', async () => {
+    const {serial, transport} = setup(new SilentDevice(FTDI));
+    const [port] = await serial.getPorts();
+
+    let releaseOpen: () => void = () => {
+      throw new Error('open gate resolver not initialized');
+    };
+    const openGate = new Promise<void>(resolve => {
+      releaseOpen = () => resolve();
+    });
+
+    const realOpen = transport.open.bind(transport);
+    jest.spyOn(transport, 'open').mockImplementationOnce(async (...args) => {
+      await openGate;
+      return realOpen(...args);
+    });
+
+    const opening = port.open({baudRate: 9600});
+    await Promise.resolve(); // let open() enter the "opening" state
+
+    await port.forget();
+    releaseOpen();
+
+    await expect(opening).rejects.toMatchObject({name: 'InvalidStateError'});
+    expect(port.connected).toBe(false);
+    expect(port.readable).toBeNull();
+    expect(port.writable).toBeNull();
+
+    await expect(port.open({baudRate: 9600})).rejects.toMatchObject({
+      name: 'InvalidStateError',
+    });
+  });
+
+  it('does not revive a port if forget() is called while close() is in flight', async () => {
+    const {serial} = setup(new SilentDevice(FTDI));
+    const [port] = await serial.getPorts();
+
+    await port.open({baudRate: 9600});
+    const readable = port.readable!;
+    const writable = port.writable!;
+    const reader = readable.getReader();
+    const writer = writable.getWriter();
+
+    const closing = port.close();
+    await Promise.resolve(); // let close() move into "closing"
+
+    await port.forget();
+
+    // Unblock close() so it can complete after forget().
+    reader.releaseLock();
+    writer.releaseLock();
+    await readable.cancel().catch(() => {});
+    await writable.abort().catch(() => {});
+    await closing;
+
+    await expect(port.open({baudRate: 9600})).rejects.toMatchObject({
+      name: 'InvalidStateError',
+    });
+  });
+
+  it('throws NetworkError when state changes during open() for non-forget reasons', async () => {
+    const {serial, transport, device} = setup(new SilentDevice(FTDI));
+    const [port] = await serial.getPorts();
+
+    jest.spyOn(transport, 'startReading').mockImplementationOnce(async () => {
+      // Simulate a detach while open() is still in flight. This transitions
+      // the port away from "opening" without going through forget().
+      device.detach();
+    });
+
+    await expect(port.open({baudRate: 9600})).rejects.toMatchObject({
+      name: 'NetworkError',
+      message: expect.stringContaining('state changed while opening'),
+    });
+
+    expect(port.connected).toBe(false);
+    expect(port.readable).toBeNull();
+    expect(port.writable).toBeNull();
+  });
 });
 
 describe('SerialPort signals', () => {
@@ -257,9 +337,9 @@ describe('SerialPort signals', () => {
 
     device.failNext('setSignals');
 
-    await expect(
-      port.setSignals({requestToSend: true}),
-    ).rejects.toMatchObject({name: 'NetworkError'});
+    await expect(port.setSignals({requestToSend: true})).rejects.toMatchObject({
+      name: 'NetworkError',
+    });
 
     await port.close();
   });
@@ -338,9 +418,9 @@ describe('SerialPort streams', () => {
     const [port] = await serial.getPorts();
     await port.open({baudRate: 9600});
 
-    jest.spyOn(transport, 'purgeHwBuffers').mockRejectedValueOnce(
-      new Error('purge failed'),
-    );
+    jest
+      .spyOn(transport, 'purgeHwBuffers')
+      .mockRejectedValueOnce(new Error('purge failed'));
 
     await expect(port.readable!.cancel()).resolves.toBeUndefined();
     await port.close();
@@ -351,9 +431,9 @@ describe('SerialPort streams', () => {
     const [port] = await serial.getPorts();
     await port.open({baudRate: 9600});
 
-    jest.spyOn(transport, 'purgeHwBuffers').mockRejectedValueOnce(
-      new Error('purge failed'),
-    );
+    jest
+      .spyOn(transport, 'purgeHwBuffers')
+      .mockRejectedValueOnce(new Error('purge failed'));
 
     await expect(port.writable!.abort()).resolves.toBeUndefined();
     await port.close();
@@ -391,7 +471,9 @@ describe('SerialPort streams', () => {
 
   it('ignores non-matching data/error events for readable subscriptions', async () => {
     const transport = new VirtualSerialTransport();
-    const a = transport.addDevice(new SilentDevice(FTDI), {hasPermission: true});
+    const a = transport.addDevice(new SilentDevice(FTDI), {
+      hasPermission: true,
+    });
     const b = transport.addDevice(
       new SilentDevice({usbVendorId: 0x10c4, usbProductId: 0xea60}),
       {hasPermission: true},
@@ -517,10 +599,15 @@ describe('Serial connect/disconnect events', () => {
 
   it('dispatches serial-level connect/disconnect for unrelated devices', async () => {
     const transport = new VirtualSerialTransport();
-    const first = transport.addDevice(new EchoDevice(FTDI), {hasPermission: true});
-    transport.addDevice(new EchoDevice({usbVendorId: 0x10c4, usbProductId: 0xea60}), {
+    const first = transport.addDevice(new EchoDevice(FTDI), {
       hasPermission: true,
     });
+    transport.addDevice(
+      new EchoDevice({usbVendorId: 0x10c4, usbProductId: 0xea60}),
+      {
+        hasPermission: true,
+      },
+    );
 
     const serial = new Serial(transport);
     const [port] = await serial.getPorts();
@@ -736,7 +823,9 @@ describe('Serial.requestPort()', () => {
 
     await expect(
       serial.requestPort({
-        filters: [{bluetoothServiceClassId: 0x1101, usbVendorId: FTDI.usbVendorId}],
+        filters: [
+          {bluetoothServiceClassId: 0x1101, usbVendorId: FTDI.usbVendorId},
+        ],
       }),
     ).rejects.toThrow(
       'A filter cannot specify both bluetoothServiceClassId and usbVendorId.',
@@ -748,7 +837,9 @@ describe('Serial.requestPort()', () => {
 
     await expect(
       serial.requestPort({
-        filters: [{bluetoothServiceClassId: 0x1101, usbProductId: FTDI.usbProductId}],
+        filters: [
+          {bluetoothServiceClassId: 0x1101, usbProductId: FTDI.usbProductId},
+        ],
       }),
     ).rejects.toThrow(
       'A filter cannot specify both bluetoothServiceClassId and usbProductId.',

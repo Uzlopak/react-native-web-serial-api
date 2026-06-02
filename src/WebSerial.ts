@@ -200,7 +200,9 @@ function parityToNative(parity: ParityType): number {
   }
 }
 
-const FLOW_CONTROL_NATIVE: Readonly<Record<FlowControlType, 'RTS_CTS' | 'NONE'>> = {
+const FLOW_CONTROL_NATIVE: Readonly<
+  Record<FlowControlType, 'RTS_CTS' | 'NONE'>
+> = {
   none: 'NONE',
   hardware: 'RTS_CTS',
 };
@@ -266,6 +268,7 @@ export class SerialPort extends EventTarget {
   #readableController: ReadableStreamDefaultController<Uint8Array> | null =
     null;
   #writableController: WritableStreamDefaultController | null = null;
+  #forgetRequested: boolean = false;
 
   #resetToClosedState(state: 'closed' | 'forgotten' = 'closed'): void {
     this.#dataSubscription?.remove();
@@ -283,6 +286,7 @@ export class SerialPort extends EventTarget {
     this.#bufferSize = undefined;
     this.#state = state;
     this.#connected = false;
+    this.#forgetRequested = state === 'forgotten';
   }
 
   constructor(
@@ -666,6 +670,30 @@ export class SerialPort extends EventTarget {
       );
     }
 
+    // Guard against lifecycle races (e.g. forget() called while open() is
+    // still awaiting native setup). Do not revive a forgotten/changed state.
+    if (this.#state !== 'opening') {
+      try {
+        await this.#usb.close(this.#deviceId, this.#portNumber);
+      } catch {
+        // ignore
+      }
+
+      if (this.#state === 'forgotten' || this.#state === 'forgetting') {
+        this.#resetToClosedState('forgotten');
+        throw new DOMException(
+          'The port has been forgotten while opening.',
+          'InvalidStateError',
+        );
+      }
+
+      this.#resetToClosedState();
+      throw new DOMException(
+        'Failed to open serial port: state changed while opening.',
+        'NetworkError',
+      );
+    }
+
     this.#state = 'opened'; // 9.3. Set this.[[state]] to "opened".
     this.#bufferSize = bufferSize; // 9.4. Set this.[[bufferSize]] to options["bufferSize"].
 
@@ -734,7 +762,9 @@ export class SerialPort extends EventTarget {
     }
 
     // 10.1.2-10.1.4 and logical disconnect bookkeeping.
-    this.#resetToClosedState();
+    // If forget() was requested while close() was in flight, preserve
+    // forgotten semantics instead of reviving the port to "closed".
+    this.#resetToClosedState(this.#forgetRequested ? 'forgotten' : 'closed');
     // (No port-level "disconnect" dispatch here — that event signals physical
     // detach, fired by Serial from the native USB state events. See open().)
   }
@@ -744,6 +774,8 @@ export class SerialPort extends EventTarget {
    */
   async forget(): Promise<void> {
     // The forget() method steps are:
+
+    this.#forgetRequested = true;
 
     // Forgetting an open port must not leave active streams/native resources
     // behind. Close first so the instance becomes cleanly unusable afterwards.

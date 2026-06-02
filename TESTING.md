@@ -251,6 +251,9 @@ that drives the real UI against the in-app mock (via the demo toggle):
 # start an Android emulator, then:
 npm --prefix example run android   # build + install the debug app (Metro)
 npm --prefix example run e2e       # maestro test .maestro
+
+# from the repo root: run host Jest first, then emulator E2E
+npm run test:host+emulator
 ```
 
 - `demo-echo.yaml` — enable demo mode → connect to the FTDI echo device → send a
