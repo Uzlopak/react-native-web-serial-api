@@ -6,11 +6,17 @@
 # APK, so the app runs WITHOUT Metro / a dev server. The JS bundler runs once
 # at build time; after install the app is fully self-contained.
 #
-# Usage:
-#   ./scripts/deploy-release.sh           # build, install on the connected device, launch
-#   ./scripts/deploy-release.sh --build   # build the APK only (no install)
-#   ./scripts/deploy-release.sh --no-launch
-#   DEVICE=192.168.1.50:5555 ./scripts/deploy-release.sh   # target a specific adb device
+# To avoid shipping a STALE bundle, every build first clears Metro's caches and
+# deletes the previously generated JS-bundle artifacts, so the bundle is always
+# re-transformed from the current source (see "force a fresh JS bundle" below).
+# Pass --keep-cache to skip that and reuse caches for a faster incremental build.
+#
+# Usage (run from the example/ directory):
+#   ./deploy-release.sh                # build, install on the connected device, launch
+#   ./deploy-release.sh --build        # build the APK only (no install)
+#   ./deploy-release.sh --no-launch
+#   ./deploy-release.sh --keep-cache   # reuse Metro/bundle caches (faster, may be stale)
+#   DEVICE=192.168.1.50:5555 ./deploy-release.sh   # target a specific adb device
 #
 # Environment overrides (auto-detected if unset):
 #   JAVA_HOME      - JDK 17 (RN 0.85 / Gradle 8.13 require JDK 17-21)
@@ -23,21 +29,21 @@ APP_ID="dev.react_native_web_serial_api.example"
 MAIN_ACTIVITY="${APP_ID}/.MainActivity"
 
 # Resolve paths relative to this script so it works from any CWD.
-# This script lives in <repo>/scripts; the buildable app is in <repo>/example
+# This script lives in <repo>/example; that is the buildable app
 # (the repo-root android/ is the library module and has no gradlew).
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(dirname "$SCRIPT_DIR")"
-EXAMPLE_DIR="$REPO_ROOT/example"
+EXAMPLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ANDROID_DIR="$EXAMPLE_DIR/android"
 APK="$ANDROID_DIR/app/build/outputs/apk/release/app-release.apk"
 
 # --- arg parsing ---------------------------------------------------------
 DO_INSTALL=1
 DO_LAUNCH=1
+KEEP_CACHE=0
 for arg in "$@"; do
   case "$arg" in
-    --build)     DO_INSTALL=0; DO_LAUNCH=0 ;;
-    --no-launch) DO_LAUNCH=0 ;;
+    --build)      DO_INSTALL=0; DO_LAUNCH=0 ;;
+    --no-launch)  DO_LAUNCH=0 ;;
+    --keep-cache) KEEP_CACHE=1 ;;
     -h|--help)   grep '^#' "$0" | grep -v '^#!' | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown option: $arg" >&2; exit 1 ;;
   esac
@@ -93,6 +99,32 @@ adb_target=()
 if [ -n "${DEVICE:-}" ]; then
   adb connect "$DEVICE" >/dev/null 2>&1 || true
   adb_target=(-s "$DEVICE")
+fi
+
+# --- force a fresh JS bundle (avoid embedding a stale one) ----------------
+# A release build embeds the JS bundle at build time, and two caches can make
+# that embedded bundle STALE:
+#   1. Metro's transform / file-map cache (in os.tmpdir()).
+#   2. Gradle treating its bundle task (createBundleReleaseJsAndAssets) as
+#      up-to-date. That task's inputs are the example app's JS, but the LIBRARY
+#      source lives outside example/ (at the repo root, aliased in via
+#      babel module-resolver), so edits there don't mark the task out of date.
+# Clearing Metro's caches and deleting the generated/merged bundle artifacts
+# forces a full re-transform from current source. Only JS-bundle artifacts are
+# removed, so the (slow) native build stays incrementally cached.
+if [ "$KEEP_CACHE" -eq 1 ]; then
+  echo "==> --keep-cache: reusing Metro/bundle caches (build may be stale)."
+else
+  echo "==> Clearing Metro caches and stale JS-bundle artifacts…"
+  metro_tmp="$(node -e 'process.stdout.write(require("os").tmpdir())' 2>/dev/null || echo "${TMPDIR:-/tmp}")"
+  rm -rf "$metro_tmp"/metro-cache "$metro_tmp"/metro-file-map-* \
+         "$metro_tmp"/haste-map-* "$metro_tmp"/metro-symbolicate* 2>/dev/null || true
+  rm -rf "$ANDROID_DIR"/app/build/generated/assets/react \
+         "$ANDROID_DIR"/app/build/generated/res/react \
+         "$ANDROID_DIR"/app/build/generated/sourcemaps/react \
+         "$ANDROID_DIR"/app/build/intermediates/assets/release \
+         "$ANDROID_DIR"/app/build/intermediates/merged_assets/release \
+         "$ANDROID_DIR"/app/build/intermediates/compressed_assets/release 2>/dev/null || true
 fi
 
 # --- build ---------------------------------------------------------------

@@ -74,7 +74,7 @@ describe('DOMExceptionPolyfill', () => {
 
   it('works when Error.captureStackTrace is unavailable', () => {
     const original = (Error as ErrorConstructor).captureStackTrace;
-    delete (Error as ErrorConstructor).captureStackTrace;
+    delete (Error as {captureStackTrace?: unknown}).captureStackTrace;
     try {
       const e = new DOMExceptionPolyfill('no-capture', 'AbortError');
       expect(e.name).toBe('AbortError');

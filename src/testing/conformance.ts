@@ -10,14 +10,23 @@
  *   - on a real device / browser — see the example app's Self-Test screen,
  *     via {@link runSerialConformance}.
  *
+ * The `WPT …` cases at the end are ports of the official Web Platform Tests
+ * (vendored in tmp/serial: serialPort_loopback*, serialPort_readable,
+ * serialPort_disconnect, idlharness) — so the spec's own behavioural tests run
+ * both under Jest and on-device, not just in a browser.
+ *
  * {@link runRealDeviceSmokeTest} runs a small, hardware-safe subset against a
  * *real* connected device (the live `serial`).
  */
 
+import {EventTarget} from '../lib/event-target';
 import type {SerialOptions} from '../WebSerial';
-import {Serial} from '../WebSerial';
+import {Serial, SerialPort} from '../WebSerial';
 import {EchoDevice, SerialDevice, SilentDevice} from './serial-device';
-import type {VirtualDeviceOptions} from './virtual-serial';
+import type {
+  VirtualDeviceOptions,
+  VirtualSerialOptions,
+} from './virtual-serial';
 import {VirtualSerialTransport} from './virtual-serial';
 
 export type ConformanceTest = {
@@ -132,13 +141,50 @@ const FTDI = {usbVendorId: 0x0403, usbProductId: 0x6001} as const;
 async function onePort(
   device: SerialDevice = new EchoDevice(FTDI),
   options: VirtualDeviceOptions = {},
+  transportOptions: VirtualSerialOptions = {},
 ) {
-  const transport = new VirtualSerialTransport();
+  const transport = new VirtualSerialTransport(transportOptions);
   const handle = transport.addDevice(device, {hasPermission: true, ...options});
   const serial = new Serial(transport);
   const [port] = await serial.getPorts();
   assert(port !== undefined, 'fixture failed: expected one port');
   return {transport, serial, device: handle, port};
+}
+
+// ── Helpers for the WPT-derived cases (ported from tmp/serial) ────────────────
+
+/** Build an n-byte buffer whose byte i is `fn(i) & 0xff`. */
+function makeBytes(n: number, fn: (i: number) => number): Uint8Array {
+  const out = new Uint8Array(n);
+  for (let i = 0; i < n; i++) out[i] = fn(i) & 0xff;
+  return out;
+}
+
+/**
+ * The PRNG used by the WPT serialPort_readable test (and its Arduino sketch):
+ * an LCG whose stream both sides regenerate to verify large reads byte-exact.
+ */
+function makePrng(seed: number): () => number {
+  let state = seed;
+  return () => {
+    state = (Math.imul(1103515245, state) + 12345) % (1 << 31);
+    return (state >> 16) & 0xff;
+  };
+}
+
+/** Reads an 8-byte {seed,length} config, then streams `length` PRNG bytes. */
+class PrngDevice extends SerialDevice {
+  readonly usbVendorId = FTDI.usbVendorId;
+  readonly usbProductId = FTDI.usbProductId;
+  onData(data: Uint8Array): void {
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    const seed = view.getUint32(0, /* littleEndian */ true);
+    const length = view.getUint32(4, /* littleEndian */ true);
+    const next = makePrng(seed);
+    const out = new Uint8Array(length);
+    for (let i = 0; i < length; i++) out[i] = next();
+    this.send(out);
+  }
 }
 
 // ── The suite ────────────────────────────────────────────────────────────────
@@ -444,6 +490,346 @@ export const serialConformanceTests: ConformanceTest[] = [
       );
       await reacquired.open({baudRate: 9600});
       await reacquired.close();
+    },
+  },
+
+  // ── WPT-derived behavioural + IDL tests (ports of tmp/serial) ───────────────
+
+  {
+    name: 'WPT loopback: a series of small writes round-trips byte-exact',
+    async run() {
+      const {port} = await onePort();
+      await port.open({baudRate: 115200, bufferSize: 1024});
+      const data = makeBytes(64, i => i);
+      const reader = port.readable!.getReader();
+      for (let i = 0; i < 10; i++) {
+        const writer = port.writable!.getWriter();
+        await writer.write(data);
+        const writePromise = writer.close();
+        const got = await readBytes(reader, data.length);
+        await writePromise;
+        assert(bytesEqual(got, data), `iteration ${i}: echo mismatch`);
+      }
+      reader.releaseLock();
+      await port.close();
+    },
+  },
+  {
+    name: 'WPT loopback: a series of large writes round-trips byte-exact',
+    async run() {
+      const {port} = await onePort();
+      await port.open({baudRate: 115200, bufferSize: 1024});
+      const data = makeBytes(10 * 1024, i => i >> 10);
+      const reader = port.readable!.getReader();
+      for (let i = 0; i < 10; i++) {
+        const writer = port.writable!.getWriter();
+        await writer.write(data);
+        const writePromise = writer.close();
+        const got = await readBytes(reader, data.length, 5000);
+        await writePromise;
+        assert(bytesEqual(got, data), `iteration ${i}: large echo mismatch`);
+      }
+      reader.releaseLock();
+      await port.close();
+    },
+  },
+  {
+    name: 'WPT loopback: cancelling the reader discards buffered data',
+    async run() {
+      const {port} = await onePort();
+      await port.open({baudRate: 115200, bufferSize: 64});
+      const writer = port.writable!.getWriter();
+      // Echoed back but never read — cancelling must drop it, not deliver it.
+      await writer.write(Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8]));
+      await Promise.resolve();
+      await port.readable!.cancel();
+
+      const expected = [9, 10, 11, 12, 13, 14, 15, 16];
+      const reader = port.readable!.getReader();
+      const readPromise = readBytes(reader, expected.length);
+      await writer.write(Uint8Array.from(expected));
+      writer.releaseLock();
+      const got = await readPromise;
+      reader.releaseLock();
+      assert(
+        bytesEqual(got, expected),
+        `cancel should discard the buffer; got [${got}]`,
+      );
+      await port.close();
+    },
+  },
+  {
+    name: 'WPT flow control: hardware back-pressure de-asserts CTS',
+    async run() {
+      // The device de-asserts CTS once its receive buffer fills; a small
+      // threshold keeps the test fast and deterministic.
+      const {port} = await onePort(new EchoDevice(FTDI), {
+        flowControlThreshold: 16,
+      });
+      await port.open({
+        baudRate: 115200,
+        bufferSize: 255,
+        flowControl: 'hardware',
+      });
+      const writer = port.writable!.getWriter();
+      assert(
+        (await port.getSignals()).clearToSend,
+        'CTS should start asserted',
+      );
+      const buffer = new Uint8Array(1);
+      let writes = 0;
+      while ((await port.getSignals()).clearToSend) {
+        await writer.write(buffer);
+        if (++writes > 10000) throw new Error('CTS never dropped');
+      }
+      assert(writes > 0, 'should write at least once before CTS drops');
+      writer.releaseLock();
+      await port.close();
+    },
+  },
+  {
+    name: 'WPT: a break condition surfaces as BreakError on the readable',
+    async run() {
+      const {port, device} = await onePort();
+      await port.open({baudRate: 115200, bufferSize: 1024});
+      const reader = port.readable!.getReader();
+      const readPromise = (async () => {
+        const first = await reader.read();
+        assert(!first.done, 'stream should not be done');
+        assert(
+          !!first.value && bytesEqual(first.value, [0]),
+          'expected a leading zero byte before the break',
+        );
+        await reader.read(); // should reject with BreakError
+      })();
+      await port.setSignals({break: true});
+      device.push([0]);
+      device.emitError('Break received', 'BreakError');
+      await assertRejects(() => readPromise, 'break condition', {
+        name: 'BreakError',
+      });
+    },
+  },
+  {
+    name: 'WPT: a receive-buffer overrun surfaces as BufferOverrunError',
+    async run() {
+      const {port, device} = await onePort();
+      device.overrunAfter(1024);
+      await port.open({baudRate: 115200, bufferSize: 1024});
+      const data = makeBytes(16 * 1024, i => i >> 10);
+      const reader = port.readable!.getReader();
+      const writer = port.writable!.getWriter();
+      const writePromise = writer.write(data);
+
+      let actualLength = 0;
+      let caught: unknown;
+      try {
+        while (true) {
+          const {value, done} = await withTimeout(
+            reader.read(),
+            2000,
+            'overrun read',
+          );
+          if (value) actualLength += value.byteLength;
+          if (done) throw new Error('stream ended without overrun');
+        }
+      } catch (e) {
+        caught = e;
+      }
+      reader.releaseLock();
+      writer.releaseLock();
+      await writePromise.catch(() => {});
+      assert(actualLength > 0, 'partial data should arrive before the overrun');
+      assertEqual(
+        (caught as Error)?.name,
+        'BufferOverrunError',
+        'overrun should surface as BufferOverrunError',
+      );
+    },
+  },
+  {
+    name: 'WPT readable: a large PRNG stream arrives intact (chunked)',
+    async run() {
+      const seed = 10;
+      // Scaled down from the WPT 10 MB so the on-device Self-Test stays fast,
+      // while still exercising chunked reads + byte-exact integrity at scale.
+      const length = 256 * 1024;
+      const {port} = await onePort(new PrngDevice(), {}, {chunkSize: 1024});
+      await port.open({baudRate: 115200, bufferSize: 1024});
+
+      const config = new DataView(new ArrayBuffer(8));
+      config.setUint32(0, seed, /* littleEndian */ true);
+      config.setUint32(4, length, /* littleEndian */ true);
+      const writer = port.writable!.getWriter();
+      const writePromise = writer.write(new Uint8Array(config.buffer));
+
+      const reader = port.readable!.getReader();
+      const next = makePrng(seed);
+      let bytesRead = 0;
+      while (bytesRead < length) {
+        const {value, done} = await withTimeout(
+          reader.read(),
+          5000,
+          'prng read',
+        );
+        assert(!done, 'stream ended before the full length');
+        const chunk = value!;
+        for (let i = 0; i < chunk.byteLength; i++) {
+          const expected = next();
+          if (chunk[i] !== expected) {
+            throw new Error(
+              `mismatch at byte ${bytesRead + i}: ${chunk[i]} !== ${expected}`,
+            );
+          }
+        }
+        bytesRead += chunk.byteLength;
+      }
+      assertEqual(bytesRead, length, 'should read the full PRNG stream');
+      await writePromise;
+      reader.releaseLock();
+      writer.releaseLock();
+      await port.close();
+    },
+  },
+  {
+    name: 'WPT disconnect: a pending read rejects with NetworkError and fires disconnect on the port',
+    async run() {
+      const {serial, port, device} = await onePort();
+      await port.open({baudRate: 115200, bufferSize: 1024});
+      let disconnectTarget: unknown;
+      serial.addEventListener('disconnect', e => {
+        disconnectTarget = (e as {target?: unknown}).target;
+      });
+      const reader = port.readable!.getReader();
+      // Lose the device while a read is pending (next microtask).
+      void Promise.resolve().then(() => device.loseDevice());
+      let caught: unknown;
+      try {
+        for (let i = 0; i < 100000; i++) {
+          const {done} = await reader.read();
+          assert(!done, 'read should reject, not complete');
+        }
+      } catch (e) {
+        caught = e;
+      }
+      reader.releaseLock();
+      assertEqual(
+        (caught as Error)?.name,
+        'NetworkError',
+        'a pending read should reject with NetworkError on disconnect',
+      );
+      assertEqual(port.readable, null, 'readable should be cleared');
+      assert(disconnectTarget === port, 'disconnect target should be the port');
+    },
+  },
+  {
+    name: 'WPT disconnect: a pending write rejects with NetworkError',
+    async run() {
+      const {serial, port, device} = await onePort();
+      await port.open({baudRate: 115200, bufferSize: 1024});
+      let disconnectTarget: unknown;
+      serial.addEventListener('disconnect', e => {
+        disconnectTarget = (e as {target?: unknown}).target;
+      });
+      const writer = port.writable!.getWriter();
+      const data = new Uint8Array(64);
+      let caught: unknown;
+      try {
+        for (let i = 0; i < 1000; i++) {
+          if (i === 3) device.loseDevice();
+          await writer.write(data);
+        }
+      } catch (e) {
+        caught = e;
+      }
+      writer.releaseLock();
+      assertEqual(
+        (caught as Error)?.name,
+        'NetworkError',
+        'a pending write should reject with NetworkError on disconnect',
+      );
+      assertEqual(port.writable, null, 'writable should be cleared');
+      assert(disconnectTarget === port, 'disconnect target should be the port');
+    },
+  },
+  {
+    name: 'WPT IDL: Serial and SerialPort expose the spec interface',
+    async run() {
+      const serial = new Serial();
+      assert(serial instanceof EventTarget, 'Serial should be an EventTarget');
+      for (const method of [
+        'getPorts',
+        'requestPort',
+        'addEventListener',
+        'removeEventListener',
+      ]) {
+        assertEqual(
+          typeof (serial as unknown as Record<string, unknown>)[method],
+          'function',
+          `Serial.${method} should be a function`,
+        );
+      }
+      assert(
+        'onconnect' in serial && 'ondisconnect' in serial,
+        'Serial should expose onconnect/ondisconnect',
+      );
+
+      const {port} = await onePort();
+      assert(port instanceof SerialPort, 'port should be a SerialPort');
+      assert(
+        port instanceof EventTarget,
+        'SerialPort should be an EventTarget',
+      );
+      for (const method of [
+        'open',
+        'close',
+        'forget',
+        'getInfo',
+        'getSignals',
+        'setSignals',
+      ]) {
+        assertEqual(
+          typeof (port as unknown as Record<string, unknown>)[method],
+          'function',
+          `SerialPort.${method} should be a function`,
+        );
+      }
+      for (const attr of [
+        'connected',
+        'readable',
+        'writable',
+        'onconnect',
+        'ondisconnect',
+      ]) {
+        assert(attr in port, `SerialPort should expose ${attr}`);
+      }
+      assertEqual(
+        typeof port.connected,
+        'boolean',
+        'connected should be boolean',
+      );
+      assertEqual(port.readable, null, 'readable should be null before open()');
+      assertEqual(port.writable, null, 'writable should be null before open()');
+
+      const info = port.getInfo();
+      assertEqual(typeof info.usbVendorId, 'number', 'getInfo().usbVendorId');
+      assertEqual(typeof info.usbProductId, 'number', 'getInfo().usbProductId');
+
+      await port.open({baudRate: 9600});
+      const signals = await port.getSignals();
+      for (const key of [
+        'dataCarrierDetect',
+        'clearToSend',
+        'ringIndicator',
+        'dataSetReady',
+      ] as const) {
+        assertEqual(
+          typeof signals[key],
+          'boolean',
+          `getSignals().${key} should be a boolean`,
+        );
+      }
+      await port.close();
     },
   },
 ];

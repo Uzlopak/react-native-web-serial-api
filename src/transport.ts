@@ -59,10 +59,10 @@ export type ErrorEvent = {
   error: string;
   /**
    * Optional spec error name (e.g. "BreakError", "BufferOverrunError",
-   * "FramingError", "ParityError") for a typed read error. The current polyfill
-   * ignores this and always surfaces "NetworkError" on the readable stream; it
-   * exists so a transport can report the precise W3C error type, and so the
-   * WPT-derived spec tests can document that gap (see src/__tests__/wpt).
+   * "FramingError", "ParityError") for a typed read error. When present the
+   * polyfill surfaces a DOMException of that name on the readable stream
+   * (otherwise it defaults to "NetworkError"); the WPT-derived spec tests in
+   * src/testing/conformance.ts exercise this (BreakError, BufferOverrunError).
    */
   errorName?: string;
 };

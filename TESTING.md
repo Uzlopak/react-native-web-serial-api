@@ -187,21 +187,27 @@ const smoke = await runRealDeviceSmokeTest(serial);     // small, safe, real dev
 
 ## WPT spec compliance
 
-[`src/__tests__/wpt/`](src/__tests__/wpt) ports the **official Web Platform
-Tests** for the Web Serial API (vendored in `tmp/serial/`) so the spec's own test
-logic runs against our polyfill via the virtual loopback device — proof of W3C
-compliance, not just our own assertions. It covers loopback read/write, flow
-control, large-stream throughput, disconnect, typed read errors, and the
-interface (IDL) shape.
+The `WPT …` cases **at the end of the conformance suite**
+([`src/testing/conformance.ts`](src/testing/conformance.ts)) are ports of the
+**official Web Platform Tests** for the Web Serial API (vendored in
+`tmp/serial/`), so the spec's own test logic runs against our polyfill via the
+virtual loopback device — proof of W3C compliance, not just our own assertions.
+They live in the conformance suite rather than a separate Jest-only file, so the
+same spec tests run **under Jest *and* on-device** (Self Test screen), not just
+in a browser. They cover loopback read/write (small + large, repeated),
+`readable.cancel()` discarding buffered data, hardware flow-control
+back-pressure, typed `BreakError`/`BufferOverrunError`, large PRNG-stream
+integrity, disconnect during a pending read/write, and the interface (IDL) shape.
 
 Porting the spec faithfully originally surfaced five real gaps in the polyfill
 (typed `BreakError`/`BufferOverrunError` on the readable; disconnect rejecting
 the pending read/write with `NetworkError`; the `disconnect` event `target`; and
 a leaked subscription on `readable.cancel()`). All are now **fixed** in
-`WebSerial.ts`, and these tests pass as regression guards. See
-[`src/__tests__/wpt/README.md`](src/__tests__/wpt/README.md) for the fix table
-and the list of browser-security WPT files that don't apply to a non-browser
-polyfill.
+`WebSerial.ts`, and these cases pass as regression guards. The browser-security
+WPT files (permission prompts, secure-context, `requestPort()` user-gesture
+gating) don't apply to a React Native polyfill and are intentionally not ported;
+the PRNG-stream length is scaled down from the upstream 10 MB so the on-device
+Self Test stays fast.
 
 ---
 
