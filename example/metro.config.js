@@ -32,6 +32,13 @@ const peerModulePaths = modules.reduce((acc, name) => {
 const config = {
   watchFolders: [root],
   resolver: {
+    // RN's default blockList excludes everything under `__tests__/` from the
+    // bundle. The on-device SelfTestScreen, however, runs the library's shared
+    // conformance suite, which lives at `src/__tests__/conformance-suite.ts`
+    // (kept there so the package build excludes it from the published npm
+    // package). Allow just that one file through while still blocking real test
+    // files.
+    blockList: /\/__tests__\/(?!conformance-suite\.ts$).*$/,
     nodeModulesPaths: [
       path.resolve(__dirname, 'node_modules'),
       path.resolve(root, 'node_modules'),

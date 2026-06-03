@@ -5,7 +5,7 @@
  * example app's Self-Test screen — one suite, two runtimes.
  */
 import {describe, it} from '@jest/globals';
-import {serialConformanceTests} from '../testing/conformance';
+import {serialConformanceTests} from './conformance-suite';
 
 describe('Web Serial conformance (virtual transport)', () => {
   for (const test of serialConformanceTests) {

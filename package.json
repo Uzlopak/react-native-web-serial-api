@@ -21,6 +21,18 @@
     },
     "./package.json": "./package.json"
   },
+  "files": [
+    "src",
+    "lib",
+    "android",
+    "react-native.config.js",
+    "TESTING.md",
+    "!android/build",
+    "!**/__tests__",
+    "!**/__fixtures__",
+    "!**/__mocks__",
+    "!**/.*"
+  ],
   "scripts": {
     "prepare": "bob build",
     "clean": "node -e \"require('fs').rm(\\\"./lib\\\", { recursive: true }, () => {console.log(\\\"'lib' folder deleted\\\")})\"",

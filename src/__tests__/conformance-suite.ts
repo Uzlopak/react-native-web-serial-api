@@ -20,14 +20,14 @@
  */
 
 import {EventTarget} from '../lib/event-target';
-import type {SerialOptions} from '../WebSerial';
-import {Serial, SerialPort} from '../WebSerial';
-import {EchoDevice, SerialDevice, SilentDevice} from './serial-device';
+import {EchoDevice, SerialDevice, SilentDevice} from '../testing/serial-device';
 import type {
   VirtualDeviceOptions,
   VirtualSerialOptions,
-} from './virtual-serial';
-import {VirtualSerialTransport} from './virtual-serial';
+} from '../testing/virtual-serial';
+import {VirtualSerialTransport} from '../testing/virtual-serial';
+import type {SerialOptions} from '../WebSerial';
+import {Serial, SerialPort} from '../WebSerial';
 
 export type ConformanceTest = {
   name: string;

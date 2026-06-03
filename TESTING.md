@@ -163,21 +163,26 @@ repo's [`jest.config.js`](jest.config.js).
 
 ## The conformance suite (one suite, two runtimes)
 
-[`src/testing/conformance.ts`](src/testing/conformance.ts) exports
+[`src/__tests__/conformance-suite.ts`](src/__tests__/conformance-suite.ts) exports
 `serialConformanceTests` — self-contained cases (each builds its own
 `Serial` + `VirtualSerialTransport`) with built-in assertions and **no
-test-runner dependency**. The very same array runs:
+test-runner dependency**. It is **test-only code**: it is excluded from the
+build and from the published npm package (it imports the shipped testing
+utilities, not the other way round), so it adds nothing to consumers' bundles.
+The very same array runs:
 
 - **under Jest** — [`src/__tests__/conformance.test.ts`](src/__tests__/conformance.test.ts):
   ```ts
-  import {serialConformanceTests} from 'react-native-web-serial-api/testing';
+  import {serialConformanceTests} from './conformance-suite';
   for (const t of serialConformanceTests) it(t.name, () => t.run());
   ```
 - **on a device** — via `runSerialConformance()`, which returns a structured
-  pass/fail result per test (it never throws).
+  pass/fail result per test (it never throws). The example app's Self-Test
+  screen imports it directly from the test folder (a dev-only import — see
+  [`example/src/screens/SelfTestScreen.tsx`](example/src/screens/SelfTestScreen.tsx)).
 
 ```ts
-import {runSerialConformance, runRealDeviceSmokeTest} from 'react-native-web-serial-api/testing';
+import {runSerialConformance, runRealDeviceSmokeTest} from './conformance-suite';
 
 const results = await runSerialConformance();           // virtual, full suite
 const smoke = await runRealDeviceSmokeTest(serial);     // small, safe, real device
@@ -188,7 +193,7 @@ const smoke = await runRealDeviceSmokeTest(serial);     // small, safe, real dev
 ## WPT spec compliance
 
 The `WPT …` cases **at the end of the conformance suite**
-([`src/testing/conformance.ts`](src/testing/conformance.ts)) are ports of the
+([`src/__tests__/conformance-suite.ts`](src/__tests__/conformance-suite.ts)) are ports of the
 **official Web Platform Tests** for the Web Serial API (vendored in
 `tmp/serial/`), so the spec's own test logic runs against our polyfill via the
 virtual loopback device — proof of W3C compliance, not just our own assertions.

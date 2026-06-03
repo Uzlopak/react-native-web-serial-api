@@ -1,12 +1,12 @@
 import {describe, expect, it} from '@jest/globals';
+import {EchoDevice} from '../testing/serial-device';
+import {VirtualSerialTransport} from '../testing/virtual-serial';
+import {Serial, SerialPort} from '../WebSerial';
 import {
   runRealDeviceSmokeTest,
   runSerialConformance,
   serialConformanceTests,
-} from '../testing/conformance';
-import {EchoDevice} from '../testing/serial-device';
-import {VirtualSerialTransport} from '../testing/virtual-serial';
-import {Serial, SerialPort} from '../WebSerial';
+} from './conformance-suite';
 
 describe('conformance runners and helper branches', () => {
   it('runSerialConformance returns passing results for the default suite', async () => {

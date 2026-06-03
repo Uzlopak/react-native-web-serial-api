@@ -31,7 +31,7 @@ def getExtOrIntegerDefault(name) {
 }
 
 android {
-  namespace "dev.webserialapi"
+  namespace = "dev.webserialapi"
 
   compileSdkVersion getExtOrIntegerDefault("compileSdkVersion")
 
@@ -50,7 +50,7 @@ repositories {
   mavenCentral()
   google()
   // usb-serial-for-android is published on JitPack
-  maven { url "https://jitpack.io" }
+  maven { url = "https://jitpack.io" }
 }
 
 dependencies {

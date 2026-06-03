@@ -8,7 +8,7 @@ buildscript {
         kotlinVersion = "2.1.0"
     }
     repositories {
-        maven { url "https://jitpack.io" }
+        maven { url = "https://jitpack.io" }
         google()
         mavenCentral()
     }

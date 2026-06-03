@@ -7,11 +7,11 @@ import {
   View,
 } from 'react-native';
 import type {Serial} from 'react-native-web-serial-api';
-import type {ConformanceResult} from 'react-native-web-serial-api/testing';
+import type {ConformanceResult} from '../../../src/__tests__/conformance-suite';
 import {
   runRealDeviceSmokeTest,
   runSerialConformance,
-} from 'react-native-web-serial-api/testing';
+} from '../../../src/__tests__/conformance-suite';
 import {AppBar} from '../components/AppBar';
 import {colors} from '../theme';
 

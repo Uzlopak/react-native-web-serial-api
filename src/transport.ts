@@ -62,7 +62,8 @@ export type ErrorEvent = {
    * "FramingError", "ParityError") for a typed read error. When present the
    * polyfill surfaces a DOMException of that name on the readable stream
    * (otherwise it defaults to "NetworkError"); the WPT-derived spec tests in
-   * src/testing/conformance.ts exercise this (BreakError, BufferOverrunError).
+   * src/__tests__/conformance-suite.ts exercise this (BreakError,
+   * BufferOverrunError).
    */
   errorName?: string;
 };
