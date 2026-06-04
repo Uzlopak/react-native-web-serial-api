@@ -50,6 +50,8 @@ function chipLabel(vendorId: number | undefined): string {
       return 'FTDI';
     case 0x10c4:
       return 'CP210x';
+    case 0x04b4:
+      return 'Cypress';
     case 0x1a86:
       return 'CH34x';
     case 0x067b:

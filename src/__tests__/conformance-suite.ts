@@ -834,29 +834,41 @@ export const serialConformanceTests: ConformanceTest[] = [
   },
 ];
 
+/** Progress hooks so a UI can render results live as each test completes. */
+export type ConformanceProgress = {
+  /** Called just before a test starts running. */
+  onStart?: (name: string, index: number, total: number) => void;
+  /** Called after each test completes (pass or fail). */
+  onResult?: (result: ConformanceResult) => void;
+};
+
 /**
  * Run the full virtual conformance suite, collecting a result per test. Never
  * throws — intended for the on-device Self-Test screen.
  */
-export async function runSerialConformance(): Promise<ConformanceResult[]> {
+export async function runSerialConformance(
+  progress?: ConformanceProgress,
+): Promise<ConformanceResult[]> {
   const results: ConformanceResult[] = [];
-  for (const test of serialConformanceTests) {
+  const total = serialConformanceTests.length;
+  for (let i = 0; i < total; i++) {
+    const test = serialConformanceTests[i];
+    progress?.onStart?.(test.name, i, total);
     const start = Date.now();
+    let result: ConformanceResult;
     try {
       await test.run();
-      results.push({
-        name: test.name,
-        passed: true,
-        durationMs: Date.now() - start,
-      });
+      result = {name: test.name, passed: true, durationMs: Date.now() - start};
     } catch (e) {
-      results.push({
+      result = {
         name: test.name,
         passed: false,
         error: errorMessage(e),
         durationMs: Date.now() - start,
-      });
+      };
     }
+    results.push(result);
+    progress?.onResult?.(result);
   }
   return results;
 }
@@ -868,15 +880,21 @@ export async function runSerialConformance(): Promise<ConformanceResult[]> {
  */
 export async function runRealDeviceSmokeTest(
   serial: Serial,
+  progress?: ConformanceProgress,
 ): Promise<ConformanceResult[]> {
   const results: ConformanceResult[] = [];
+  const push = (result: ConformanceResult) => {
+    results.push(result);
+    progress?.onResult?.(result);
+  };
   const record = async (name: string, fn: () => Promise<void>) => {
+    progress?.onStart?.(name, results.length, 0);
     const start = Date.now();
     try {
       await fn();
-      results.push({name, passed: true, durationMs: Date.now() - start});
+      push({name, passed: true, durationMs: Date.now() - start});
     } catch (e) {
-      results.push({
+      push({
         name,
         passed: false,
         error: errorMessage(e),
@@ -886,14 +904,14 @@ export async function runRealDeviceSmokeTest(
   };
 
   const ports = await serial.getPorts();
-  results.push({
+  push({
     name: 'getPorts() returns a list',
     passed: Array.isArray(ports),
     durationMs: 0,
   });
 
   if (ports.length === 0) {
-    results.push({
+    push({
       name: 'a device is connected and permitted',
       passed: false,
       error: 'No ports. Connect a device, grant USB permission, then retry.',

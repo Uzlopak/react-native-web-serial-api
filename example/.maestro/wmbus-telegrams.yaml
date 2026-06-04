@@ -1,0 +1,34 @@
+# End-to-end: drive the app against the in-app WM-Bus gateway simulator (no USB
+# hardware). Enables "Virtual device (demo)", connects to the gateway (shown as
+# a CH340), switches its receiver on, and waits for a streamed WM-Bus telegram.
+#
+# Like a real IMST gateway, the receiver is OFF until the host selects a link
+# mode. We send Set Active Configuration (T-mode) as raw HEX; the gateway then
+# forwards its virtual meter's telegrams as HCI 0x20 events. The meter's device
+# id 0x56789ABC shows as the hex run "BC 9A 78 56".
+# Note: Maestro matches text as a *full* regex, hence the `.*` wildcards.
+#
+# Prereqs: an Android emulator/device with the example debug build installed
+# (npm run android), then: npm run e2e
+appId: dev.react_native_web_serial_api.example
+---
+- launchApp:
+    clearState: true
+- assertVisible: 'Simple USB Terminal'
+- tapOn:
+    id: 'appbar-menu'
+- tapOn: 'Virtual device.*'
+- assertVisible: 'Virtual device mode.*'
+- assertVisible: 'CH340'
+- tapOn: 'CH340'
+- tapOn: 'Connect'
+# Terminal is in HEX mode by default — send the enable command, then the
+# gateway streams a telegram every ~2s.
+- tapOn:
+    id: 'terminal-input'
+- inputText: 'C0 09 03 02 0E 00 00 00 32 00 88 13 00 00 D8 27 C0'
+- tapOn:
+    id: 'terminal-send'
+- extendedWaitUntil:
+    visible: '.*BC 9A 78 56.*'
+    timeout: 15000

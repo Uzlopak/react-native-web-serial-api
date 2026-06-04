@@ -13,11 +13,22 @@ import {
   runSerialConformance,
 } from '../../../src/__tests__/conformance-suite';
 import {AppBar} from '../components/AppBar';
+import {
+  compareWithSimulator,
+  makeVirtualGatewayPort,
+  runWMBusConformance,
+} from '../devices/wmbus/conformance';
 import {colors} from '../theme';
 
 type Props = {
   serial: Serial;
   onBack: () => void;
+};
+
+/** Live-progress hooks shared by every runner (results stream in as they finish). */
+type Progress = {
+  onStart: (name: string, index: number, total: number) => void;
+  onResult: (result: ConformanceResult) => void;
 };
 
 /**
@@ -32,18 +43,39 @@ export function SelfTestScreen({serial, onBack}: Props) {
   );
   const [running, setRunning] = React.useState(false);
   const [label, setLabel] = React.useState('');
+  const [current, setCurrent] = React.useState<{
+    name: string;
+    index: number;
+    total: number;
+  } | null>(null);
 
   const run = React.useCallback(
-    async (name: string, fn: () => Promise<ConformanceResult[]>) => {
+    async (
+      name: string,
+      fn: (progress: Progress) => Promise<ConformanceResult[]>,
+    ) => {
       setRunning(true);
       setLabel(name);
-      setResults(null);
+      setResults([]);
+      setCurrent(null);
+      // Results stream in live via onResult; rows appear as each test finishes.
+      const collected: ConformanceResult[] = [];
+      const progress: Progress = {
+        onStart: (n, index, total) => setCurrent({name: n, index, total}),
+        onResult: r => {
+          collected.push(r);
+          setResults([...collected]);
+        },
+      };
       try {
-        setResults(await fn());
+        const final = await fn(progress);
+        setResults(collected.length > 0 ? collected : final);
       } catch (e) {
-        setResults([{name, passed: false, error: String(e), durationMs: 0}]);
+        collected.push({name, passed: false, error: String(e), durationMs: 0});
+        setResults([...collected]);
       } finally {
         setRunning(false);
+        setCurrent(null);
       }
     },
     [],
@@ -62,7 +94,9 @@ export function SelfTestScreen({serial, onBack}: Props) {
           style={[styles.button, running && styles.buttonDisabled]}
           disabled={running}
           onPress={() =>
-            run('Conformance suite (virtual)', runSerialConformance)
+            run('Conformance suite (virtual)', progress =>
+              runSerialConformance(progress),
+            )
           }>
           <Text style={styles.buttonText}>Run conformance suite</Text>
         </TouchableOpacity>
@@ -74,11 +108,48 @@ export function SelfTestScreen({serial, onBack}: Props) {
           ]}
           disabled={running}
           onPress={() =>
-            run('Connected device smoke test', () =>
-              runRealDeviceSmokeTest(serial),
+            run('Connected device smoke test', progress =>
+              runRealDeviceSmokeTest(serial, progress),
             )
           }>
           <Text style={styles.buttonText}>Run on connected device</Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.actions}>
+        <TouchableOpacity
+          testID="wmbus-virtual"
+          style={[styles.button, styles.buttonWmbus, running && styles.buttonDisabled]}
+          disabled={running}
+          onPress={() =>
+            run('WM-Bus gateway suite (virtual)', async progress =>
+              runWMBusConformance(await makeVirtualGatewayPort(), progress),
+            )
+          }>
+          <Text style={styles.buttonText}>WM-Bus suite (virtual)</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          testID="wmbus-compare"
+          style={[styles.button, styles.buttonWmbus, running && styles.buttonDisabled]}
+          disabled={running}
+          onPress={() =>
+            run('WM-Bus device vs simulator', async progress => {
+              const [connected] = await serial.getPorts();
+              if (!connected) {
+                return [
+                  {
+                    name: 'a WM-Bus gateway is connected',
+                    passed: false,
+                    error:
+                      'Connect a WM-Bus gateway and grant USB permission, then retry.',
+                    durationMs: 0,
+                  },
+                ];
+              }
+              return compareWithSimulator(connected, progress);
+            })
+          }>
+          <Text style={styles.buttonText}>Compare device ↔ sim</Text>
         </TouchableOpacity>
       </View>
 
@@ -86,11 +157,13 @@ export function SelfTestScreen({serial, onBack}: Props) {
         <View
           style={[
             styles.summary,
-            results ? (allPassed ? styles.ok : styles.fail) : null,
+            results && !running ? (allPassed ? styles.ok : styles.fail) : null,
           ]}>
           <Text style={styles.summaryText}>
             {running
-              ? `Running: ${label}…`
+              ? current
+                ? `Running ${current.total ? `${current.index + 1}/${current.total} ` : ''}· ${passed}✓ ${total - passed}✗ — ${current.name}…`
+                : `Running: ${label}…`
               : `${label} — ${passed}/${total} passed`}
           </Text>
         </View>
@@ -98,7 +171,12 @@ export function SelfTestScreen({serial, onBack}: Props) {
         <Text style={styles.hint}>
           The conformance suite runs entirely in-app against a virtual device —
           no hardware required. “Run on connected device” exercises a small,
-          safe subset against a real port (or the active demo device).
+          safe subset against a real port (or the active demo device).{'\n\n'}
+          “WM-Bus suite (virtual)” runs the IMST HCI gateway checks against the
+          built-in simulator. “Compare device ↔ sim” runs the same checks against
+          the connected gateway and the simulator and flags any case where the
+          real device behaves differently — turn demo mode off and connect a real
+          WM-Bus gateway first.
         </Text>
       )}
 
@@ -132,6 +210,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   buttonAlt: {backgroundColor: colors.accent},
+  buttonWmbus: {backgroundColor: '#6a1b9a'},
   buttonDisabled: {opacity: 0.5},
   buttonText: {color: colors.onPrimary, fontWeight: '600'},
   hint: {color: colors.textSecondary, paddingHorizontal: 16, paddingBottom: 8},
