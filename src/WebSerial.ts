@@ -252,13 +252,8 @@ export class SerialPort extends EventTarget {
   #portNumber: number;
   #usbVendorId?: number;
   #usbProductId?: number;
-
-  // Tracks the current state of output signals for partial updates
-  #outputSignals: Required<SerialOutputSignals> = {
-    dataTerminalReady: false,
-    requestToSend: false,
-    break: false,
-  };
+  // Baud rate of the current open(), used to size the native write timeout.
+  #baudRate: number = 0;
 
   #dataSubscription: {remove: () => void} | null = null;
   #errorSubscription: {remove: () => void} | null = null;
@@ -284,9 +279,23 @@ export class SerialPort extends EventTarget {
     this.#writeFatal = false;
     this.#pendingClosePromise = null;
     this.#bufferSize = undefined;
+    this.#baudRate = 0;
     this.#state = state;
     this.#connected = false;
     this.#forgetRequested = state === 'forgotten';
+  }
+
+  /**
+   * Compute a native write timeout (ms) large enough to actually drain `length`
+   * bytes at the negotiated baud rate. A fixed 2 s timeout spuriously fails
+   * large writes on slow links; this scales with the payload while keeping a 2 s
+   * floor. ~10 bits per byte (start + 8 data + stop) with a 2× safety margin.
+   */
+  #writeTimeoutFor(length: number): number {
+    const kMinTimeoutMs = 2000;
+    const baud = this.#baudRate > 0 ? this.#baudRate : 9600;
+    const estimatedMs = Math.ceil((length * 10 * 1000) / baud) * 2;
+    return Math.max(kMinTimeoutMs, estimatedMs);
   }
 
   constructor(
@@ -497,7 +506,12 @@ export class SerialPort extends EventTarget {
         },
         async write(chunk) {
           try {
-            await self.#usb.write(deviceId, portNumber, Array.from(chunk));
+            await self.#usb.write(
+              deviceId,
+              portNumber,
+              Array.from(chunk),
+              self.#writeTimeoutFor(chunk.length),
+            );
           } catch (e) {
             // If the port was disconnected, set this.[[writeFatal]] to true.
             self.#writeFatal = true;
@@ -696,6 +710,7 @@ export class SerialPort extends EventTarget {
 
     this.#state = 'opened'; // 9.3. Set this.[[state]] to "opened".
     this.#bufferSize = bufferSize; // 9.4. Set this.[[bufferSize]] to options["bufferSize"].
+    this.#baudRate = options.baudRate;
 
     // When the port becomes logically connected:
     this.#connected = true; // 2. Set port.[[connected]] to true.
@@ -703,6 +718,13 @@ export class SerialPort extends EventTarget {
     // device presence (attach/detach), dispatched by Serial from the native
     // USB state events — not logical open()/close(). So we do not dispatch them
     // here; that also avoids re-entrancy with auto-reconnect listeners.
+
+    // Materialise the readable eagerly so its data subscription is live the
+    // instant the native read pump (startReading, above) begins emitting. The
+    // device may transmit immediately on open; without an active subscription
+    // those first bytes would be delivered to no listener and silently lost in
+    // the window between open() resolving and the first port.readable access.
+    void this.readable;
   }
 
   /**
@@ -813,9 +835,6 @@ export class SerialPort extends EventTarget {
     ) {
       throw new TypeError('At least one signal must be specified.');
     }
-
-    // Merge with current output signal state for partial updates
-    this.#outputSignals = {...this.#outputSignals, ...signals};
 
     const promises: Promise<void>[] = [];
 

@@ -962,3 +962,52 @@ describe('Serial initialization fallback', () => {
     expect(fake.getInfo()).toEqual({});
   });
 });
+
+describe('SerialPort review-hardening fixes', () => {
+  it('does not drop inbound data sent before readable is first accessed', async () => {
+    const {serial, device} = setup(new SilentDevice(FTDI));
+    const [port] = await serial.getPorts();
+    await port.open({baudRate: 9600});
+
+    // The device transmits immediately on open, before the app has touched
+    // port.readable. When the read subscription is only wired on the first
+    // readable access, these bytes are dropped on the floor; they must instead
+    // be buffered and delivered to the eventual reader.
+    device.push([0xde, 0xad, 0xbe, 0xef]);
+
+    // Let the transport actually dispatch the inbound data BEFORE port.readable
+    // is ever accessed — reproducing the real native race where data events
+    // fire between open() resolving and the first readable access.
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const reader = port.readable!.getReader();
+    const {value} = await reader.read();
+    expect(value ? Array.from(value) : []).toEqual([0xde, 0xad, 0xbe, 0xef]);
+    reader.releaseLock();
+
+    await port.close();
+  });
+
+  it('scales the native write timeout with payload size and baud rate', async () => {
+    const {serial, transport} = setup(new SilentDevice(FTDI));
+    const [port] = await serial.getPorts();
+    await port.open({baudRate: 9600});
+
+    const writeSpy = jest.spyOn(transport, 'write');
+    const writer = port.writable!.getWriter();
+
+    await writer.write(new Uint8Array([1, 2, 3]));
+    const smallTimeout = writeSpy.mock.calls[0][3] as number;
+    expect(typeof smallTimeout).toBe('number');
+    expect(smallTimeout).toBeGreaterThanOrEqual(2000);
+
+    await writer.write(new Uint8Array(20000));
+    const bigTimeout = writeSpy.mock.calls[1][3] as number;
+    // 20 kB at 9600 baud (~21 s of line time) cannot drain within the 2 s
+    // floor, so the computed timeout must grow well past the small-write one.
+    expect(bigTimeout).toBeGreaterThan(smallTimeout);
+
+    writer.releaseLock();
+    await port.close();
+  });
+});

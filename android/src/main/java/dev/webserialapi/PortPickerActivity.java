@@ -117,18 +117,26 @@ public class PortPickerActivity extends AppCompatActivity {
     }
 
     private void showPickerDialog() {
-        PortPickerDialogFragment dialog = PortPickerDialogFragment.newInstance(
-                this,
-                getFilteredDrivers(),
-                resolve(titleSelectPort,        DEFAULT_TITLE_SELECT_PORT),
-                resolve(titleNoPortsAvailable,  DEFAULT_TITLE_NO_PORTS_AVAILABLE),
-                resolve(messageNoPortsAvailable, DEFAULT_MESSAGE_NO_PORTS_AVAILABLE)
-        );
-        dialog.show(getSupportFragmentManager(), TAG_PICKER_DIALOG);
+        new PortPickerDialogFragment().show(getSupportFragmentManager(), TAG_PICKER_DIALOG);
     }
 
     private static String resolve(String override, String defaultValue) {
         return (override != null && !override.isEmpty()) ? override : defaultValue;
+    }
+
+    // Resolved labels, read by the (possibly recreated) dialog fragment. The
+    // backing fields are restored from getIntent() in onCreate, so these survive
+    // a configuration change such as rotation.
+    String resolvedTitleSelectPort() {
+        return resolve(titleSelectPort, DEFAULT_TITLE_SELECT_PORT);
+    }
+
+    String resolvedTitleNoPortsAvailable() {
+        return resolve(titleNoPortsAvailable, DEFAULT_TITLE_NO_PORTS_AVAILABLE);
+    }
+
+    String resolvedMessageNoPortsAvailable() {
+        return resolve(messageNoPortsAvailable, DEFAULT_MESSAGE_NO_PORTS_AVAILABLE);
     }
 
     /** Called by the DialogFragment when the user selects a port. */
@@ -153,42 +161,28 @@ public class PortPickerActivity extends AppCompatActivity {
     }
 
     // -------------------------------------------------------------------------
-    // Static DialogFragment – survives configuration changes such as rotation
+    // Static DialogFragment – survives configuration changes such as rotation.
+    // It deliberately keeps NO transient state of its own: on every (re)creation
+    // it rebuilds the driver list and labels from the host activity, whose own
+    // state is restored from its Intent. Stashing the non-Parcelable driver list
+    // and an Activity reference on the fragment (as before) loses them on the
+    // recreation that rotation triggers, leaving an empty / dead dialog.
     // -------------------------------------------------------------------------
     public static class PortPickerDialogFragment extends DialogFragment {
 
-        // Not passed via Bundle argument because UsbSerialDriver is not Serializable/Parcelable
-        private List<UsbSerialDriver> drivers;
-        private PortPickerActivity    host;
-        private String                titleSelectPort;
-        private String                titleNoPortsAvailable;
-        private String                messageNoPortsAvailable;
-
-        static PortPickerDialogFragment newInstance(
-                PortPickerActivity host,
-                List<UsbSerialDriver> drivers,
-                String titleSelectPort,
-                String titleNoPortsAvailable,
-                String messageNoPortsAvailable) {
-            PortPickerDialogFragment f = new PortPickerDialogFragment();
-            f.host             = host;
-            f.drivers          = drivers;
-            f.titleSelectPort        = titleSelectPort;
-            f.titleNoPortsAvailable  = titleNoPortsAvailable;
-            f.messageNoPortsAvailable = messageNoPortsAvailable;
-            return f;
-        }
-
         @Override
         public android.app.Dialog onCreateDialog(Bundle savedInstanceState) {
+            PortPickerActivity act = (PortPickerActivity) requireActivity();
             Context ctx = requireContext();
+
+            List<UsbSerialDriver> drivers = act.getFilteredDrivers();
 
             if (drivers == null || drivers.isEmpty()) {
                 return new AlertDialog.Builder(ctx)
-                        .setTitle(titleNoPortsAvailable)
-                        .setMessage(messageNoPortsAvailable)
-                        .setPositiveButton(android.R.string.ok, (d, w) -> cancelAndFinish())
-                        .setOnCancelListener(d -> cancelAndFinish())
+                        .setTitle(act.resolvedTitleNoPortsAvailable())
+                        .setMessage(act.resolvedMessageNoPortsAvailable())
+                        .setPositiveButton(android.R.string.ok, (d, w) -> act.onPickerCancelled())
+                        .setOnCancelListener(d -> act.onPickerCancelled())
                         .create();
             }
 
@@ -215,21 +209,14 @@ public class PortPickerActivity extends AppCompatActivity {
             }
 
             return new AlertDialog.Builder(ctx)
-                    .setTitle(titleSelectPort)
-                    .setItems(labels.toArray(new String[0]), (d, which) -> {
-                        if (host != null) {
-                            host.onPortSelected(
+                    .setTitle(act.resolvedTitleSelectPort())
+                    .setItems(labels.toArray(new String[0]), (d, which) ->
+                            act.onPortSelected(
                                     flatDrivers.get(which).getDevice(),
-                                    flatPortNumbers.get(which));
-                        }
-                    })
-                    .setNegativeButton(android.R.string.cancel, (d, w) -> cancelAndFinish())
-                    .setOnCancelListener(d -> cancelAndFinish())
+                                    flatPortNumbers.get(which)))
+                    .setNegativeButton(android.R.string.cancel, (d, w) -> act.onPickerCancelled())
+                    .setOnCancelListener(d -> act.onPickerCancelled())
                     .create();
-        }
-
-        private void cancelAndFinish() {
-            if (host != null) host.onPickerCancelled();
         }
     }
 }

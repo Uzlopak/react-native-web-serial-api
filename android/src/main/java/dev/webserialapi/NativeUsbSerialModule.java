@@ -31,9 +31,11 @@ import com.facebook.react.bridge.BaseActivityEventListener;
 
 import java.util.ArrayList;
 import java.util.EnumSet;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class NativeUsbSerialModule extends NativeUsbSerialSpec {
 
@@ -43,14 +45,22 @@ public class NativeUsbSerialModule extends NativeUsbSerialSpec {
 
     private final UsbManager usbManager;
 
+    // These maps are mutated from several threads — TurboModule calls (native
+    // modules thread), the broadcast receivers (main thread) and the
+    // SerialInputOutputManager listener (its own IO thread) — so they must be
+    // concurrent to avoid corruption / ConcurrentModificationException.
     // key: "deviceId:portNumber"
-    private final Map<String, UsbSerialPort> openPorts = new HashMap<>();
-    private final Map<String, UsbDeviceConnection> openConnections = new HashMap<>();
-    private final Map<String, SerialInputOutputManager> ioManagers = new HashMap<>();
+    private final Map<String, UsbSerialPort> openPorts = new ConcurrentHashMap<>();
+    private final Map<String, UsbDeviceConnection> openConnections = new ConcurrentHashMap<>();
+    private final Map<String, SerialInputOutputManager> ioManagers = new ConcurrentHashMap<>();
 
     // key: requestCode
-    private final Map<Integer, Promise> pendingPermissions = new HashMap<>();
+    private final Map<Integer, Promise> pendingPermissions = new ConcurrentHashMap<>();
     private int nextRequestCode = 0;
+
+    // Resumes blocking USB work (open/setParameters) off the main thread when a
+    // permission grant arrives on the broadcast-receiver (main) thread.
+    private final ExecutorService backgroundExecutor = Executors.newSingleThreadExecutor();
 
     private static final int PORT_PICKER_REQUEST_CODE = 0xAB8465;
     private Promise pendingPortPickerPromise = null;
@@ -177,7 +187,41 @@ public class NativeUsbSerialModule extends NativeUsbSerialSpec {
         IntentFilter usbFilter = new IntentFilter();
         usbFilter.addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);
         usbFilter.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);
-        reactContext.registerReceiver(usbStateReceiver, usbFilter);
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            reactContext.registerReceiver(usbStateReceiver, usbFilter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            reactContext.registerReceiver(usbStateReceiver, usbFilter);
+        }
+    }
+
+    /**
+     * Release everything acquired in the constructor and during the module's
+     * life. Without this, every JS reload / context teardown leaks the three
+     * registered receivers (kept alive against a dead ReactApplicationContext)
+     * and any open USB ports — and stacks duplicate connect/disconnect/data
+     * events from the orphaned receivers.
+     */
+    @Override
+    public void invalidate() {
+        ReactApplicationContext ctx = getReactApplicationContext();
+        try { ctx.unregisterReceiver(permissionReceiver); } catch (Exception ignored) {}
+        try { ctx.unregisterReceiver(usbStateReceiver); } catch (Exception ignored) {}
+        try { ctx.removeActivityEventListener(activityEventListener); } catch (Exception ignored) {}
+
+        for (String key : new ArrayList<>(ioManagers.keySet())) {
+            SerialInputOutputManager ioManager = ioManagers.remove(key);
+            try { if (ioManager != null) ioManager.stop(); } catch (Exception ignored) {}
+        }
+        for (String key : new ArrayList<>(openPorts.keySet())) {
+            UsbSerialPort port = openPorts.remove(key);
+            UsbDeviceConnection connection = openConnections.remove(key);
+            try { if (port != null) port.close(); } catch (Exception ignored) {}
+            try { if (connection != null) connection.close(); } catch (Exception ignored) {}
+        }
+
+        backgroundExecutor.shutdown();
+
+        super.invalidate();
     }
 
     // Helper to avoid implementing all Promise methods in anonymous classes
@@ -294,7 +338,11 @@ public class NativeUsbSerialModule extends NativeUsbSerialSpec {
                     public void onResolve(Object value) {
                         Boolean granted = (Boolean) value;
                         if (granted != null && granted) {
-                            open(fDeviceId, fPortNumber, fBaudRate, fDataBits, fStopBits, fParity, promise);
+                            // onResolve runs on the permission broadcast receiver's
+                            // (main) thread; openDevice()/port.open() do blocking USB
+                            // control transfers, so resume off the main thread.
+                            backgroundExecutor.execute(() ->
+                                open(fDeviceId, fPortNumber, fBaudRate, fDataBits, fStopBits, fParity, promise));
                         } else {
                             promise.reject("PERMISSION_DENIED", "USB permission denied");
                         }
@@ -640,6 +688,7 @@ public class NativeUsbSerialModule extends NativeUsbSerialSpec {
 
     @Override
     public void requestPermission(double deviceId, Promise promise) {
+        int requestCode = -1;
         try {
             UsbSerialDriver driver = findDriver((int) deviceId);
             if (driver == null) {
@@ -651,7 +700,7 @@ public class NativeUsbSerialModule extends NativeUsbSerialSpec {
                 return;
             }
 
-            int requestCode = nextRequestCode++;
+            requestCode = nextRequestCode++;
             pendingPermissions.put(requestCode, promise);
 
             Intent intent = new Intent(ACTION_USB_PERMISSION);
@@ -671,6 +720,8 @@ public class NativeUsbSerialModule extends NativeUsbSerialSpec {
             );
             usbManager.requestPermission(driver.getDevice(), permissionIntent);
         } catch (Exception e) {
+            // Don't leave an orphaned pending promise behind if dispatch failed.
+            if (requestCode != -1) pendingPermissions.remove(requestCode);
             promise.reject("REQUEST_PERMISSION_ERROR", e.getMessage(), e);
         }
     }
