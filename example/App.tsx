@@ -57,6 +57,14 @@ function App(): React.JSX.Element {
     }
   }, [remoteUrl]);
 
+  // Tear the remote socket down when leaving remote mode (or switching URL) so
+  // it never outlives its use and hold the bridge's single serial session open.
+  React.useEffect(() => {
+    return () => {
+      remote?.transport.disconnect();
+    };
+  }, [remote]);
+
   const activeSerial = remote ? remote.serial : demo ? demo.serial : serial;
   const activeTransport = remote
     ? remote.transport

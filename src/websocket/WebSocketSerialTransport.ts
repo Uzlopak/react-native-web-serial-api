@@ -56,6 +56,9 @@ export type WebSocketConnectionState =
   | 'connecting'
   | 'open'
   | 'reconnecting'
+  // The consumer closed the port: the socket is dropped (releasing the remote
+  // serial session) but the transport will reconnect on demand when reopened.
+  | 'suspended'
   | 'closed';
 
 export type WebSocketSerialOptions = {
@@ -338,13 +341,41 @@ export class WebSocketSerialTransport implements SerialTransport {
     this.#options.onClosed?.(reason);
   }
 
-  /** Resolve when the socket is connected; reject on timeout or terminal close. */
+  /**
+   * Release the socket because the consumer closed the port. Unlike a drop, this
+   * does not auto-reconnect (no lingering bridge session) — the next `open()` or
+   * discovery reconnects on demand. Distinct from the terminal `disconnect()`.
+   */
+  #suspend(): void {
+    if (this.#reconnectTimer !== undefined) {
+      clearTimeout(this.#reconnectTimer);
+      this.#reconnectTimer = undefined;
+    }
+    this.#reconnectAttempts = 0;
+    this.#failAll('serial port closed');
+    this.#state = 'suspended';
+    const ws = this.#ws;
+    this.#ws = null; // detach first so the socket's close handler is a no-op
+    try {
+      ws?.close();
+    } catch {
+      // already closing
+    }
+  }
+
+  /**
+   * Resolve when the socket is connected; reject on timeout or terminal close.
+   * Wakes a `suspended` transport (after `close()`) by reconnecting on demand.
+   */
   #whenConnected(): Promise<void> {
     if (this.#state === 'open') {
       return Promise.resolve();
     }
     if (this.#state === 'closed') {
       return Promise.reject(new Error('WebSocket transport is closed.'));
+    }
+    if (this.#state === 'suspended') {
+      this.#connect(); // reconnect on demand
     }
     return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -552,11 +583,16 @@ export class WebSocketSerialTransport implements SerialTransport {
   async close(_deviceId: number, _portNumber: number): Promise<void> {
     this.#portOpen = false;
     this.#reading = false;
-    if (this.#state === 'closed') {
+    if (this.#state === 'closed' || this.#state === 'suspended') {
       return;
     }
-    // Stop forwarding but keep the WebSocket/serial port open for a reopen.
-    await this.#command('stopReading').catch(() => undefined);
+    // Tell the bridge to stop forwarding, then drop the socket so the remote
+    // serial session is released and the device isn't left in a stale state.
+    // A later open() reconnects on demand (see #whenConnected → #suspend).
+    if (this.#state === 'open') {
+      await this.#sendCommand('stopReading').catch(() => undefined);
+    }
+    this.#suspend();
   }
 
   isOpen(_deviceId: number, _portNumber: number): boolean {

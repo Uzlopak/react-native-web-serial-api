@@ -350,6 +350,41 @@ describe('WebSocketSerialTransport — reconnection', () => {
     expect(transport.connectionState).toBe('closed');
   });
 
+  it('releases the socket on close() and reconnects on the next open()', async () => {
+    FakeWebSocket.instances = [];
+    const transport = new WebSocketSerialTransport('ws://test', {
+      WebSocket: FakeWebSocket as unknown as WebSocketCtor,
+      reconnectInitialDelayMs: 0,
+    });
+    const ws1 = FakeWebSocket.instances[0];
+    autoAnswer(ws1);
+    ws1.fireOpen();
+    await transport.open(1, 0, {baudRate: 115200});
+    expect(transport.connectionState).toBe('open');
+
+    // close() drops the socket (ends the bridge session) and does NOT auto-reconnect.
+    await transport.close(1, 0);
+    expect(transport.connectionState).toBe('suspended');
+    await tick();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    // Reopening reconnects on demand and re-sends the line coding.
+    const reopened = transport.open(1, 0, {baudRate: 9600});
+    const ws2 = FakeWebSocket.instances[1];
+    expect(ws2).toBeTruthy();
+    const a2 = autoAnswer(ws2);
+    ws2.fireOpen();
+    await reopened;
+
+    expect(transport.connectionState).toBe('open');
+    expect(
+      a2.commands.find(c => c.command === 'setLineCoding')?.args,
+    ).toMatchObject({
+      baudRate: 9600,
+    });
+    transport.disconnect();
+  });
+
   it('does not reconnect after an explicit disconnect()', async () => {
     FakeWebSocket.instances = [];
     const transport = new WebSocketSerialTransport('ws://test', {
