@@ -101,7 +101,7 @@ function mount(
             ? (opts.signals ?? {cts: false, dsr: false, dcd: false, ri: false})
             : m.command === 'getPortInfo'
               ? (opts.portInfo ?? null)
-            : null;
+              : null;
         ws.deliverText(
           JSON.stringify({type: 'response', id: m.id, error: null, result}),
         );

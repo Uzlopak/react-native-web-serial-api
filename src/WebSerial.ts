@@ -23,14 +23,14 @@ import {getUsbSerial} from './UsbSerial';
  * even - Data word plus parity bit has even parity.
  * odd - Data word plus parity bit has odd parity.
  */
-type ParityType = 'none' | 'even' | 'odd';
+export type Parity = 'none' | 'even' | 'odd';
 
 /**
  * @see https://wicg.github.io/serial/#dom-flowcontroltype
  * none - No flow control is enabled.
  * hardware - Hardware flow control using the RTS and CTS signals is enabled.
  */
-type FlowControlType = 'none' | 'hardware';
+type FlowControl = 'none' | 'hardware';
 
 /**
  * @see https://wicg.github.io/serial/#dom-serialoptions
@@ -60,7 +60,7 @@ export type SerialOptions = {
   /**
    * The parity mode.
    */
-  parity?: ParityType;
+  parity?: Parity;
   /**
    * A positive, non-zero value indicating the size of the read and write
    * buffers that should be created.
@@ -69,7 +69,7 @@ export type SerialOptions = {
   /**
    * The flow control mode.
    */
-  flowControl?: FlowControlType;
+  flowControl?: FlowControl;
 };
 
 /**
@@ -180,16 +180,16 @@ const portInternals = new WeakMap<SerialPort, PortInternals>();
 
 const kDefaultDataBits = 8;
 const kDefaultStopBits = 1;
-const kDefaultParity: ParityType = 'none';
+const kDefaultParity: Parity = 'none';
 const kDefaultBufferSize = 255;
-const kDefaultFlowControl: FlowControlType = 'none';
+const kDefaultFlowControl: FlowControl = 'none';
 
 const kAcceptableDataBits = [7, 8] as const;
 const kAcceptableStopBits = [1, 2] as const;
-const kAcceptableParity: ParityType[] = ['none', 'even', 'odd'];
-const kAcceptableFlowControl: FlowControlType[] = ['none', 'hardware'];
+const kAcceptableParity: Parity[] = ['none', 'even', 'odd'];
+const kAcceptableFlowControl: FlowControl[] = ['none', 'hardware'];
 
-function parityToNative(parity: ParityType): number {
+function parityToNative(parity: Parity): number {
   switch (parity) {
     case 'odd':
       return 1;
@@ -200,14 +200,12 @@ function parityToNative(parity: ParityType): number {
   }
 }
 
-const FLOW_CONTROL_NATIVE: Readonly<
-  Record<FlowControlType, 'RTS_CTS' | 'NONE'>
-> = {
+const FLOW_CONTROL_NATIVE: Readonly<Record<FlowControl, 'RTS_CTS' | 'NONE'>> = {
   none: 'NONE',
   hardware: 'RTS_CTS',
 };
 
-function flowControlToNative(flowControl: FlowControlType): 'RTS_CTS' | 'NONE' {
+function flowControlToNative(flowControl: FlowControl): 'RTS_CTS' | 'NONE' {
   return FLOW_CONTROL_NATIVE[flowControl];
 }
 

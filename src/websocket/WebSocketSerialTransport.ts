@@ -24,6 +24,7 @@
  * const [port] = await serial.getPorts();
  * await port.open({baudRate: 115200});
  */
+
 import type {
   ConnectEvent,
   ControlLine,
@@ -96,8 +97,6 @@ const PARITY: Record<number, Parity> = {
   0: 'none',
   1: 'odd',
   2: 'even',
-  3: 'mark',
-  4: 'space',
 };
 
 export class WebSocketSerialTransport implements SerialTransport {

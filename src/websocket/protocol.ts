@@ -13,8 +13,9 @@
  * {@link EventMessage}s (port open/close/error).
  */
 
-/** Serial parity, mirroring the `serialport` package's string values. */
-export type Parity = 'none' | 'even' | 'odd' | 'mark' | 'space';
+import type {Parity} from '../WebSerial';
+
+export type {Parity} from '../WebSerial';
 
 /** Connection parameters for `setLineCoding`. */
 export type LineCoding = {
