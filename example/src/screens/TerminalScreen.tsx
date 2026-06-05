@@ -1,6 +1,8 @@
 import React from 'react';
 import {
-  ScrollView,
+  FlatList,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   StyleSheet,
   Text,
   TextInput,
@@ -12,9 +14,15 @@ import {AppBar} from '../components/AppBar';
 import {SingleChoiceDialog} from '../components/SingleChoiceDialog';
 import {type ConnectionSettings, toSerialOptions} from '../settings';
 import {colors} from '../theme';
+import {
+  applyTerminalLogOps,
+  createTerminalLineBuffer,
+  type TerminalLine,
+  type TerminalLogOp,
+  type TerminalSpan,
+} from '../util/TerminalLineBuffer';
 import * as TextUtil from '../util/TextUtil';
 
-type Span = {text: string; color: string; caret: boolean};
 type Connected = 'False' | 'Pending' | 'True';
 type SendBtnState = 'Idle' | 'Disabled';
 
@@ -24,7 +32,9 @@ const NEWLINES = [
   {label: '<none>', value: ''},
 ];
 const POLL_MS = 200;
-const MAX_SPANS = 2000;
+const MAX_LINES = 2000;
+const FLUSH_MS = 50;
+const FOLLOW_TAIL_THRESHOLD_PX = 24;
 
 type Props = {
   port: SerialPort;
@@ -33,7 +43,9 @@ type Props = {
 };
 
 export function TerminalScreen({port, settings, onBack}: Props) {
-  const [log, setLog] = React.useState<Span[]>([]);
+  const [logLines, setLogLines] = React.useState<TerminalLine[]>(
+    () => createTerminalLineBuffer().lines,
+  );
   const [input, setInput] = React.useState('');
   const [connected, setConnected] = React.useState<Connected>('False');
   // HEX mode is on by default (per product requirement).
@@ -65,7 +77,14 @@ export function TerminalScreen({port, settings, onBack}: Props) {
   const readerRef =
     React.useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
   const pollRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
-  const scrollRef = React.useRef<ScrollView>(null);
+  const logListRef = React.useRef<FlatList<TerminalLine>>(null);
+  const logBufferRef = React.useRef(createTerminalLineBuffer());
+  const logOpsRef = React.useRef<TerminalLogOp[]>([]);
+  const flushTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const followTailRef = React.useRef(true);
+  const [showJumpToBottom, setShowJumpToBottom] = React.useState(false);
   // Stable refs to the latest connect/teardown so the USB attach/detach
   // listeners (registered once) never call stale closures.
   const connectRef = React.useRef<() => Promise<void>>(async () => {});
@@ -86,14 +105,40 @@ export function TerminalScreen({port, settings, onBack}: Props) {
     settingsRef.current = settings;
   }, [settings]);
 
-  const append = React.useCallback((spans: Span[]) => {
-    setLog(prev => {
-      const next = prev.concat(spans);
-      return next.length > MAX_SPANS
-        ? next.slice(next.length - MAX_SPANS)
-        : next;
-    });
+  const flushLogOps = React.useCallback(() => {
+    if (flushTimerRef.current) {
+      clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+    if (logOpsRef.current.length === 0) {
+      return;
+    }
+    const ops = logOpsRef.current;
+    logOpsRef.current = [];
+    const next = applyTerminalLogOps(logBufferRef.current, ops, MAX_LINES);
+    logBufferRef.current = next;
+    setLogLines(next.lines);
   }, []);
+
+  const queueLogOp = React.useCallback(
+    (op: TerminalLogOp) => {
+      logOpsRef.current.push(op);
+      if (flushTimerRef.current) {
+        return;
+      }
+      flushTimerRef.current = setTimeout(() => {
+        flushLogOps();
+      }, FLUSH_MS);
+    },
+    [flushLogOps],
+  );
+
+  const append = React.useCallback(
+    (spans: TerminalSpan[]) => {
+      queueLogOp({type: 'append', spans});
+    },
+    [queueLogOp],
+  );
 
   const status = React.useCallback(
     (s: string) =>
@@ -102,52 +147,41 @@ export function TerminalScreen({port, settings, onBack}: Props) {
   );
 
   // ported from TerminalFragment.receive()
-  const receive = React.useCallback((data: Uint8Array) => {
-    if (hexRef.current) {
-      setLog(prev => {
-        const next = prev.concat([
+  const receive = React.useCallback(
+    (data: Uint8Array) => {
+      if (hexRef.current) {
+        append([
           {
             text: `${TextUtil.toHexString(data)}\n`,
             color: colors.receiveText,
             caret: false,
           },
         ]);
-        return next.length > MAX_SPANS
-          ? next.slice(next.length - MAX_SPANS)
-          : next;
-      });
-      return;
-    }
-    let msg = TextUtil.bytesToString(data);
-    const nl = newlineRef.current;
-    let dropCaret = false;
-    if (nl === TextUtil.NEWLINE_CRLF && msg.length > 0) {
-      // don't show CR as ^M directly before LF
-      msg = msg.split('\r\n').join('\n');
-      if (pendingNewlineRef.current && msg[0] === '\n') {
-        dropCaret = true; // CR/LF arrived in separate chunks -> drop the "^M"
+        return;
       }
-      pendingNewlineRef.current = msg[msg.length - 1] === '\r';
-    }
-    const runs = TextUtil.toCaretRuns(msg, nl.length !== 0).map(r => ({
-      text: r.text,
-      color: colors.receiveText,
-      caret: r.caret,
-    }));
-    setLog(prev => {
-      let next = prev;
-      if (dropCaret) {
-        const last = prev[prev.length - 1];
-        if (last?.caret && last.text === '^M') {
-          next = prev.slice(0, prev.length - 1);
+      let msg = TextUtil.bytesToString(data);
+      const nl = newlineRef.current;
+      let dropCaret = false;
+      if (nl === TextUtil.NEWLINE_CRLF && msg.length > 0) {
+        // don't show CR as ^M directly before LF
+        msg = msg.split('\r\n').join('\n');
+        if (pendingNewlineRef.current && msg[0] === '\n') {
+          dropCaret = true; // CR/LF arrived in separate chunks -> drop the "^M"
         }
+        pendingNewlineRef.current = msg[msg.length - 1] === '\r';
       }
-      next = next.concat(runs);
-      return next.length > MAX_SPANS
-        ? next.slice(next.length - MAX_SPANS)
-        : next;
-    });
-  }, []);
+      const runs = TextUtil.toCaretRuns(msg, nl.length !== 0).map(r => ({
+        text: r.text,
+        color: colors.receiveText,
+        caret: r.caret,
+      }));
+      if (dropCaret) {
+        queueLogOp({type: 'dropTrailingCaretM'});
+      }
+      append(runs);
+    },
+    [append, queueLogOp],
+  );
 
   const stopPoll = React.useCallback(() => {
     if (pollRef.current) {
@@ -282,9 +316,14 @@ export function TerminalScreen({port, settings, onBack}: Props) {
   React.useEffect(() => {
     connectRef.current();
     return () => {
+      flushLogOps();
+      if (flushTimerRef.current) {
+        clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = null;
+      }
       teardownRef.current(true);
     };
-  }, []);
+  }, [flushLogOps]);
 
   // Physical detach / re-attach. The library fires these on the SAME SerialPort
   // instance (it re-associates the new Android deviceId on re-attach). We keep
@@ -403,8 +442,60 @@ export function TerminalScreen({port, settings, onBack}: Props) {
     setInput('');
   };
 
+  const scrollToBottom = React.useCallback((animated: boolean) => {
+    logListRef.current?.scrollToEnd({animated});
+  }, []);
+
+  const onLogScroll = React.useCallback(
+    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const {contentOffset, contentSize, layoutMeasurement} = e.nativeEvent;
+      const atBottom =
+        contentOffset.y + layoutMeasurement.height >=
+        contentSize.height - FOLLOW_TAIL_THRESHOLD_PX;
+      if (atBottom === followTailRef.current) {
+        return;
+      }
+      followTailRef.current = atBottom;
+      setShowJumpToBottom(!atBottom);
+    },
+    [],
+  );
+
+  const onLogContentSizeChange = React.useCallback(() => {
+    if (followTailRef.current) {
+      scrollToBottom(false);
+    }
+  }, [scrollToBottom]);
+
+  const jumpToBottom = React.useCallback(() => {
+    followTailRef.current = true;
+    setShowJumpToBottom(false);
+    scrollToBottom(true);
+  }, [scrollToBottom]);
+
+  const renderLogLine = React.useCallback(
+    ({item}: {item: TerminalLine}) => (
+      <Text style={styles.mono}>
+        {item.spans.map((s, i) => (
+          <Text
+            key={`${item.id}-${i}`}
+            style={[{color: s.color}, s.caret ? styles.caret : null]}>
+            {s.text}
+          </Text>
+        ))}
+      </Text>
+    ),
+    [],
+  );
+
   const menu = [
-    {key: 'clear', title: 'Clear', onPress: () => setLog([])},
+    {
+      key: 'clear',
+      title: 'Clear',
+      onPress: () => {
+        queueLogOp({type: 'clear'});
+      },
+    },
     {key: 'newline', title: 'Newline', onPress: () => setNewlineDialog(true)},
     {
       key: 'hex',
@@ -444,23 +535,31 @@ export function TerminalScreen({port, settings, onBack}: Props) {
 
       <View style={styles.divider} />
 
-      <ScrollView
-        ref={scrollRef}
+      <FlatList
+        ref={logListRef}
+        data={logLines}
+        keyExtractor={item => String(item.id)}
+        renderItem={renderLogLine}
         style={styles.receive}
         contentContainerStyle={styles.receiveContent}
-        onContentSizeChange={() =>
-          scrollRef.current?.scrollToEnd({animated: false})
-        }>
-        <Text style={styles.mono}>
-          {log.map((s, i) => (
-            <Text
-              key={i}
-              style={[{color: s.color}, s.caret ? styles.caret : null]}>
-              {s.text}
-            </Text>
-          ))}
-        </Text>
-      </ScrollView>
+        onContentSizeChange={onLogContentSizeChange}
+        onScroll={onLogScroll}
+        scrollEventThrottle={16}
+        initialNumToRender={40}
+        maxToRenderPerBatch={64}
+        updateCellsBatchingPeriod={16}
+        windowSize={15}
+        removeClippedSubviews
+      />
+
+      {showJumpToBottom ? (
+        <TouchableOpacity
+          style={styles.jumpToBottom}
+          accessibilityLabel="Jump to bottom"
+          onPress={jumpToBottom}>
+          <Text style={styles.jumpToBottomText}>Jump to bottom</Text>
+        </TouchableOpacity>
+      ) : null}
 
       <View style={styles.divider} />
 
@@ -556,6 +655,20 @@ const styles = StyleSheet.create({
     color: colors.receiveText,
   },
   caret: {backgroundColor: colors.caretBackground},
+  jumpToBottom: {
+    position: 'absolute',
+    right: 12,
+    bottom: 64,
+    backgroundColor: colors.primary,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 14,
+  },
+  jumpToBottomText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.background,
+  },
   sendRow: {flexDirection: 'row', alignItems: 'center', padding: 4},
   input: {
     flex: 1,
