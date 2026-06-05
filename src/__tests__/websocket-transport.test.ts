@@ -200,6 +200,174 @@ describe('WebSocketSerialTransport', () => {
   });
 });
 
+// ── reconnection / resilience ────────────────────────────────────────────────
+
+/** Wire a fake socket to auto-answer control commands (one per reconnect). */
+function autoAnswer(
+  ws: FakeWebSocket,
+  opts: {
+    signals?: InputSignals;
+    portInfo?: {
+      usbVendorId?: number;
+      usbProductId?: number;
+      serialNumber?: string;
+    };
+  } = {},
+) {
+  const commands: Array<{
+    id: number;
+    command: string;
+    args?: Record<string, unknown>;
+  }> = [];
+  const binary: Uint8Array[] = [];
+  ws.onSend = d => {
+    if (typeof d === 'string') {
+      const m = JSON.parse(d);
+      if (m.type === 'command') {
+        commands.push(m);
+        const result =
+          m.command === 'getSignals'
+            ? (opts.signals ?? {cts: false, dsr: false, dcd: false, ri: false})
+            : m.command === 'getPortInfo'
+              ? (opts.portInfo ?? null)
+              : null;
+        ws.deliverText(
+          JSON.stringify({type: 'response', id: m.id, error: null, result}),
+        );
+      }
+    } else {
+      binary.push(toU8(d));
+    }
+  };
+  return {commands, binary};
+}
+
+/** Let pending microtasks + a `setTimeout(0)` (e.g. the reconnect backoff) run. */
+const tick = (): Promise<void> =>
+  new Promise(resolve => setTimeout(resolve, 0));
+
+describe('WebSocketSerialTransport — reconnection', () => {
+  it('reconnects transparently after a drop and restores the open session', async () => {
+    FakeWebSocket.instances = [];
+    const transport = new WebSocketSerialTransport('ws://test', {
+      WebSocket: FakeWebSocket as unknown as WebSocketCtor,
+      reconnectInitialDelayMs: 0,
+    });
+    const ws1 = FakeWebSocket.instances[0];
+    autoAnswer(ws1);
+    ws1.fireOpen();
+
+    // Establish session state that must survive a reconnect.
+    await transport.open(1, 0, {baudRate: 115200, dataBits: 8, parity: 1});
+    await transport.startReading(1, 0);
+    await transport.setDTR(1, 0, true);
+
+    const onDisconnect = jest.fn();
+    transport.onDisconnect(onDisconnect);
+
+    // Unexpected drop — must NOT surface as a serial disconnect.
+    ws1.fireClose();
+    expect(onDisconnect).not.toHaveBeenCalled();
+    expect(transport.connectionState).toBe('reconnecting');
+
+    // The backoff timer fires and opens a fresh socket.
+    await tick();
+    const ws2 = FakeWebSocket.instances[1];
+    expect(ws2).toBeTruthy();
+    const a2 = autoAnswer(ws2);
+    ws2.fireOpen();
+    await tick(); // flush the restore-session command chain
+
+    expect(transport.connectionState).toBe('open');
+    const restored = a2.commands.map(c => c.command);
+    expect(restored).toEqual(
+      expect.arrayContaining(['setLineCoding', 'setSignals', 'startReading']),
+    );
+    expect(
+      a2.commands.find(c => c.command === 'setLineCoding')?.args,
+    ).toMatchObject({
+      baudRate: 115200,
+      parity: 'odd',
+    });
+    expect(
+      a2.commands.find(c => c.command === 'setSignals')?.args,
+    ).toMatchObject({
+      dtr: true,
+    });
+
+    // I/O works again on the new socket.
+    await transport.write(1, 0, [9]);
+    expect(a2.binary.map(b => Array.from(b))).toContainEqual([9]);
+    expect(onDisconnect).not.toHaveBeenCalled();
+
+    transport.disconnect();
+  });
+
+  it('queues a write during the gap and flushes it after reconnecting', async () => {
+    FakeWebSocket.instances = [];
+    const transport = new WebSocketSerialTransport('ws://test', {
+      WebSocket: FakeWebSocket as unknown as WebSocketCtor,
+      reconnectInitialDelayMs: 0,
+    });
+    const ws1 = FakeWebSocket.instances[0];
+    autoAnswer(ws1);
+    ws1.fireOpen();
+    await transport.open(1, 0, {baudRate: 9600});
+
+    ws1.fireClose(); // drop while "connected"
+    const write = transport.write(1, 0, [0xaa]); // issued while reconnecting
+
+    await tick();
+    const ws2 = FakeWebSocket.instances[1];
+    const a2 = autoAnswer(ws2);
+    ws2.fireOpen();
+    await write; // resolves once the reconnection is up
+
+    expect(a2.binary.map(b => Array.from(b))).toContainEqual([0xaa]);
+    transport.disconnect();
+  });
+
+  it('gives up and disconnects once the reconnect budget is exhausted', async () => {
+    FakeWebSocket.instances = [];
+    const transport = new WebSocketSerialTransport('ws://test', {
+      WebSocket: FakeWebSocket as unknown as WebSocketCtor,
+      reconnectInitialDelayMs: 0,
+      maxReconnectAttempts: 1,
+    });
+    const onDisconnect = jest.fn();
+    const ws1 = FakeWebSocket.instances[0];
+    autoAnswer(ws1);
+    ws1.fireOpen();
+    transport.onDisconnect(onDisconnect);
+
+    ws1.fireClose(); // schedules the one allowed retry
+    await tick();
+    const ws2 = FakeWebSocket.instances[1];
+    expect(ws2).toBeTruthy();
+    ws2.fireClose(); // budget exhausted -> terminal disconnect
+
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+    expect(transport.connectionState).toBe('closed');
+  });
+
+  it('does not reconnect after an explicit disconnect()', async () => {
+    FakeWebSocket.instances = [];
+    const transport = new WebSocketSerialTransport('ws://test', {
+      WebSocket: FakeWebSocket as unknown as WebSocketCtor,
+      reconnectInitialDelayMs: 0,
+    });
+    const ws1 = FakeWebSocket.instances[0];
+    autoAnswer(ws1);
+    ws1.fireOpen();
+
+    transport.disconnect();
+    await tick();
+
+    expect(FakeWebSocket.instances).toHaveLength(1); // no new socket
+    expect(transport.connectionState).toBe('closed');
+  });
+});
+
 // ── end-to-end: Serial → WebSocketSerialTransport → bridge → echo serial ──────
 
 /** Minimal echo serial for the bridge (writes come back as data). */
