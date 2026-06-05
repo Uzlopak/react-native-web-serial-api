@@ -193,3 +193,15 @@ export class EventTarget {
     }
   }
 }
+
+type MaybeGlobal = Record<string, unknown>;
+
+export const EventImpl =
+  typeof (globalThis as MaybeGlobal).Event === 'function'
+    ? ((globalThis as MaybeGlobal).Event as typeof Event)
+    : Event;
+
+export const EventTargetImpl =
+  typeof (globalThis as MaybeGlobal).EventTarget === 'function'
+    ? ((globalThis as MaybeGlobal).EventTarget as typeof EventTarget)
+    : EventTarget;
