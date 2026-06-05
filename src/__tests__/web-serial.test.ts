@@ -10,7 +10,7 @@ import {
   type SerialDevice,
   SilentDevice,
 } from '../testing/serial-device';
-import {VirtualSerialTransport} from '../testing/virtual-serial';
+import {VirtualSerialTransport} from '../testing/virtual-serial-device';
 import type {SerialTransport} from '../transport';
 import {Serial, SerialPort} from '../WebSerial';
 

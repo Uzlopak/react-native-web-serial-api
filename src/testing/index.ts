@@ -36,7 +36,10 @@ export {
 } from './serial-device';
 export type {
   FailableOp,
-  VirtualDeviceOptions,
-  VirtualSerialOptions,
-} from './virtual-serial';
-export {VirtualDevice, VirtualSerialTransport} from './virtual-serial';
+  VirtualSerialDeviceOptions,
+  VirtualSerialTransportOptions,
+} from './virtual-serial-device';
+export {
+  VirtualSerialDevice,
+  VirtualSerialTransport,
+} from './virtual-serial-device';

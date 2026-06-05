@@ -1,7 +1,7 @@
 /**
  * Unit tests for VirtualSerialTransport surface that the Serial polyfill never
  * exercises directly: the full SerialTransport method set, error injection, and
- * the VirtualDevice handle helpers.
+ * the VirtualSerialDevice handle helpers.
  */
 import {afterEach, describe, expect, it, jest} from '@jest/globals';
 import {EchoDevice, SerialDevice, VirtualSerialTransport} from '../testing';

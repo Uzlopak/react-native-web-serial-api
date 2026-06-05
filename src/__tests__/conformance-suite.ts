@@ -22,10 +22,10 @@
 import {EventTarget} from '../lib/event-target';
 import {EchoDevice, SerialDevice, SilentDevice} from '../testing/serial-device';
 import type {
-  VirtualDeviceOptions,
-  VirtualSerialOptions,
-} from '../testing/virtual-serial';
-import {VirtualSerialTransport} from '../testing/virtual-serial';
+  VirtualSerialDeviceOptions,
+  VirtualSerialTransportOptions,
+} from '../testing/virtual-serial-device';
+import {VirtualSerialTransport} from '../testing/virtual-serial-device';
 import type {SerialOptions} from '../WebSerial';
 import {Serial, SerialPort} from '../WebSerial';
 
@@ -140,8 +140,8 @@ const FTDI = {usbVendorId: 0x0403, usbProductId: 0x6001} as const;
 /** One permitted device + a Serial wired to it; the device echoes by default. */
 async function onePort(
   device: SerialDevice = new EchoDevice(FTDI),
-  options: VirtualDeviceOptions = {},
-  transportOptions: VirtualSerialOptions = {},
+  options: VirtualSerialDeviceOptions = {},
+  transportOptions: VirtualSerialTransportOptions = {},
 ) {
   const transport = new VirtualSerialTransport(transportOptions);
   const handle = transport.addDevice(device, {hasPermission: true, ...options});

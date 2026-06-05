@@ -1,6 +1,6 @@
 import {describe, expect, it} from '@jest/globals';
 import {EchoDevice} from '../testing/serial-device';
-import {VirtualSerialTransport} from '../testing/virtual-serial';
+import {VirtualSerialTransport} from '../testing/virtual-serial-device';
 import {Serial, SerialPort} from '../WebSerial';
 import {
   runRealDeviceSmokeTest,

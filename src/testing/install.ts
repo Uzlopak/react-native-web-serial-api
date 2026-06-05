@@ -17,15 +17,15 @@
 import {setUsbSerial} from '../UsbSerial';
 import {SerialDevice} from './serial-device';
 import type {
-  VirtualDeviceOptions,
-  VirtualSerialOptions,
-} from './virtual-serial';
-import {VirtualSerialTransport} from './virtual-serial';
+  VirtualSerialDeviceOptions,
+  VirtualSerialTransportOptions,
+} from './virtual-serial-device';
+import {VirtualSerialTransport} from './virtual-serial-device';
 
 /** A device to register: a SerialDevice, optionally with transport options. */
 export type SerialMockDevice =
   | SerialDevice
-  | {device: SerialDevice; options?: VirtualDeviceOptions};
+  | {device: SerialDevice; options?: VirtualSerialDeviceOptions};
 
 export type InstallSerialMockOptions = {
   /** The simulated devices to expose. */
@@ -33,7 +33,7 @@ export type InstallSerialMockOptions = {
   /** When false, no mock is installed and `null` is returned. Defaults to true. */
   enabled?: boolean;
   /** Transport-level options (latency, chunkSize, …). */
-  transport?: VirtualSerialOptions;
+  transport?: VirtualSerialTransportOptions;
 };
 
 /**

@@ -4,7 +4,7 @@
  */
 import {afterEach, expect, it} from '@jest/globals';
 import {EchoDevice} from '../testing/serial-device';
-import {VirtualSerialTransport} from '../testing/virtual-serial';
+import {VirtualSerialTransport} from '../testing/virtual-serial-device';
 import {getUsbSerial, resetUsbSerial, setUsbSerial} from '../UsbSerial';
 import {Serial} from '../WebSerial';
 

@@ -1017,7 +1017,7 @@ export class Serial extends EventTarget {
   /**
    * @param transport Optional transport override. When provided, this `Serial`
    * talks to it instead of the global native module — the seam used by tests
-   * and the virtual-device harness (`new Serial(new VirtualSerialTransport())`).
+   * and the virtual serial device harness (`new Serial(new VirtualSerialTransport())`).
    * Omit it for the normal native-backed instance; the singleton `serial`
    * export is created this way and can still be redirected globally via
    * `setUsbSerial()`.
