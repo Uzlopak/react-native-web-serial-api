@@ -255,6 +255,35 @@ npm run test:coverage  # coverage report (HTML in coverage/lcov-report)
 
 See **[TESTING.md](TESTING.md)** for the full guide (authoring a `SerialDevice`, the conformance/WPT suites, on-device E2E, and coverage).
 
+## Remote serial over WebSocket
+
+Drive a **real** serial port that's plugged into another machine — handy for developing in a Chromium browser or an Android emulator that can't see the USB device, or for remote debugging. A small Node bridge exposes the host's serial port over a WebSocket; the app talks to it through `WebSocketSerialTransport`, which is just another `SerialTransport` — so the whole Web Serial API works on top of it unchanged.
+
+**On the host** (where the device is plugged in), run the bundled CLI (needs the optional `serialport` + `ws` deps, installed automatically on Node hosts):
+
+```sh
+npx -p react-native-web-serial-api expose-serial-websocket \
+  --port /dev/ttyUSB0 --baudrate 115200          # → ws://127.0.0.1:8080
+# add --allow-remote to bind 0.0.0.0 (⚠ exposes the port to the network)
+```
+
+**In the app** (browser / React Native), point a `Serial` at it:
+
+```ts
+import {Serial} from 'react-native-web-serial-api';
+import {WebSocketSerialTransport} from 'react-native-web-serial-api/websocket';
+
+const serial = new Serial(new WebSocketSerialTransport('ws://localhost:8080'));
+const [port] = await serial.getPorts();
+await port.open({baudRate: 115200});
+const writer = port.writable!.getWriter();
+await writer.write(new TextEncoder().encode('Hello serial!\n'));
+```
+
+The example app has this built in: **Devices → menu → “Remote serial (WebSocket)”** (enter the bridge URL).
+
+The WebSocket carries raw serial bytes as **binary** frames and a small JSON **control** protocol as text frames (`setLineCoding`, `setSignals`/`getSignals`, `startReading`/`stopReading`, `flush`, `break`, …). Note: the bridge binds to **localhost by default**; `--allow-remote` makes your serial port reachable from the network — only do that on trusted networks.
+
 ## License
 
 MIT © Aras Abbasi

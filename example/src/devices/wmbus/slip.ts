@@ -48,7 +48,9 @@ export class SlipDecoder {
       }
       if (!this.#started) continue;
       if (this.#escaped) {
-        this.#frame.push(b === SLIP.ESC_END ? SLIP.END : b === SLIP.ESC_ESC ? SLIP.ESC : b);
+        this.#frame.push(
+          b === SLIP.ESC_END ? SLIP.END : b === SLIP.ESC_ESC ? SLIP.ESC : b,
+        );
         this.#escaped = false;
       } else if (b === SLIP.ESC) {
         this.#escaped = true;

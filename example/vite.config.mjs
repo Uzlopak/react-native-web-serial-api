@@ -49,6 +49,15 @@ export default defineConfig({
           'src/testing/index.ts',
         ),
       },
+      // The `/websocket` subpath (remote-serial-over-WebSocket transport).
+      {
+        find: new RegExp(`^${rootPkg.name}/websocket$`),
+        replacement: path.resolve(
+          import.meta.dirname,
+          '..',
+          'src/websocket/index.ts',
+        ),
+      },
       // Consume the library straight from its TypeScript source (live reload)
       {
         find: new RegExp(`^${rootPkg.name}$`),

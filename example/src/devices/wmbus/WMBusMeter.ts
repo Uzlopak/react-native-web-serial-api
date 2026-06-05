@@ -4,7 +4,7 @@
  * Telegrams are injected into a hosting {@link WMBusGateway} which forwards them
  * to the serial host as WM-Bus Packet Received (0x20) events.
  */
-import {type WMBusAddress, buildWMBusPacket} from './frame';
+import {buildWMBusPacket, type WMBusAddress} from './frame';
 
 /** Encryption modes a meter can claim for its telegrams (spec p34). */
 export const ENCRYPTION_NONE = 0;
@@ -73,7 +73,10 @@ export class WMBusMeter {
   /** Transmit a single telegram now (using the current or a custom payload). */
   sendTelegram(customPayload?: number[]): void {
     if (!this.#gateway) return;
-    const packet = buildWMBusPacket(this.address, customPayload ?? this.#payload);
+    const packet = buildWMBusPacket(
+      this.address,
+      customPayload ?? this.#payload,
+    );
     this.#gateway.injectRxPacket(packet, {
       rssi: this.rssi,
       linkMode: this.linkMode,

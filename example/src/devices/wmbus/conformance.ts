@@ -10,19 +10,20 @@
  * identity-specific, and non-destructive: RAM-only state is restored and no NVM
  * write / restart commands are issued.
  */
-import {Serial} from 'react-native-web-serial-api';
+
 import type {SerialPort} from 'react-native-web-serial-api';
+import {Serial} from 'react-native-web-serial-api';
 import {VirtualSerialTransport} from 'react-native-web-serial-api/testing';
 import {ByteReader} from './bytes';
 import {
   DevMgmt,
   DevStatus,
+  decodeHci,
+  encodeHci,
   GwStatus,
   type HciMessage,
   Sap,
   WMBus,
-  decodeHci,
-  encodeHci,
 } from './hci';
 import {SlipDecoder, slipEncode} from './slip';
 import {WMBusGateway} from './WMBusGateway';
@@ -43,7 +44,9 @@ function assert(condition: unknown, message: string): asserts condition {
 
 function assertEqual<T>(actual: T, expected: T, message: string): void {
   if (actual !== expected) {
-    throw new Error(`${message} (expected ${String(expected)}, got ${String(actual)})`);
+    throw new Error(
+      `${message} (expected ${String(expected)}, got ${String(actual)})`,
+    );
   }
 }
 
@@ -73,11 +76,16 @@ class HciClient {
 
   static async open(port: SerialPort, baudRate = 115200): Promise<HciClient> {
     await port.open({baudRate});
-    return new HciClient(port.readable!.getReader(), port.writable!.getWriter());
+    return new HciClient(
+      port.readable!.getReader(),
+      port.writable!.getWriter(),
+    );
   }
 
   async send(sap: number, msg: number, payload: number[] = []): Promise<void> {
-    await this.#writer.write(Uint8Array.from(slipEncode(encodeHci(sap, msg, payload))));
+    await this.#writer.write(
+      Uint8Array.from(slipEncode(encodeHci(sap, msg, payload))),
+    );
   }
 
   /** Send a request and wait for the matching response, skipping any events. */
@@ -134,7 +142,8 @@ class HciClient {
     while (true) {
       while (this.#pending.length > 0) {
         const m = this.#pending.shift() as HciMessage;
-        if (m.sap === sap && m.msg === msg && (!predicate || predicate(m))) return m;
+        if (m.sap === sap && m.msg === msg && (!predicate || predicate(m)))
+          return m;
       }
       const remaining = deadline - Date.now();
       if (remaining <= 0) {
@@ -180,7 +189,11 @@ class HciClient {
           DevMgmt.PingRsp,
           Math.min(remaining, 1500),
           m => {
-            if (m.sap === sap && m.msg === msg && (!predicate || predicate(m))) {
+            if (
+              m.sap === sap &&
+              m.msg === msg &&
+              (!predicate || predicate(m))
+            ) {
               throw new Error(
                 `unexpected message 0x${sap.toString(16)}/0x${msg.toString(16)} received`,
               );
@@ -239,7 +252,12 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
   {
     name: 'Ping answers with status ok',
     async run(c) {
-      const rsp = await c.request(Sap.DevMgmt, DevMgmt.PingReq, [], DevMgmt.PingRsp);
+      const rsp = await c.request(
+        Sap.DevMgmt,
+        DevMgmt.PingReq,
+        [],
+        DevMgmt.PingRsp,
+      );
       assertEqual(rsp.payload[0], DevStatus.Ok, 'ping status');
     },
   },
@@ -253,7 +271,10 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
         DevMgmt.GetDeviceInfoRsp,
       );
       assertEqual(payload[0], DevStatus.Ok, 'status');
-      assert(payload.length >= 6, 'expected status + module type + 4-byte module id');
+      assert(
+        payload.length >= 6,
+        'expected status + module type + 4-byte module id',
+      );
       assert(payload[1] !== 0, 'module type should be non-zero');
     },
   },
@@ -272,17 +293,29 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
       r.u8(); // major
       r.u16le(); // build count
       assert(r.remaining >= 10, 'expected a 10-byte build date');
-      assert(isPrintableAscii(r.bytes(10)), 'build date should be printable ASCII');
+      assert(
+        isPrintableAscii(r.bytes(10)),
+        'build date should be printable ASCII',
+      );
       const name = r.rest();
-      assert(name.length > 0 && isPrintableAscii(name), 'firmware name should be printable ASCII');
+      assert(
+        name.length > 0 && isPrintableAscii(name),
+        'firmware name should be printable ASCII',
+      );
     },
   },
   {
     name: 'Date & Time round-trips (set then get)',
     async run(c) {
       const original = new ByteReader(
-        (await c.request(Sap.DevMgmt, DevMgmt.GetDateTimeReq, [], DevMgmt.GetDateTimeRsp))
-          .payload,
+        (
+          await c.request(
+            Sap.DevMgmt,
+            DevMgmt.GetDateTimeReq,
+            [],
+            DevMgmt.GetDateTimeRsp,
+          )
+        ).payload,
       );
       original.u8();
       const prev = original.u32le();
@@ -291,23 +324,43 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
       const set = await c.request(
         Sap.DevMgmt,
         DevMgmt.SetDateTimeReq,
-        [probe & 0xff, (probe >>> 8) & 0xff, (probe >>> 16) & 0xff, (probe >>> 24) & 0xff],
+        [
+          probe & 0xff,
+          (probe >>> 8) & 0xff,
+          (probe >>> 16) & 0xff,
+          (probe >>> 24) & 0xff,
+        ],
         DevMgmt.SetDateTimeRsp,
       );
       assertEqual(set.payload[0], DevStatus.Ok, 'set status');
 
       const got = new ByteReader(
-        (await c.request(Sap.DevMgmt, DevMgmt.GetDateTimeReq, [], DevMgmt.GetDateTimeRsp))
-          .payload,
+        (
+          await c.request(
+            Sap.DevMgmt,
+            DevMgmt.GetDateTimeReq,
+            [],
+            DevMgmt.GetDateTimeRsp,
+          )
+        ).payload,
       );
       got.u8();
-      assertEqual(got.u32le(), probe, 'date/time should read back what was set');
+      assertEqual(
+        got.u32le(),
+        probe,
+        'date/time should read back what was set',
+      );
 
       // restore
       await c.request(
         Sap.DevMgmt,
         DevMgmt.SetDateTimeReq,
-        [prev & 0xff, (prev >>> 8) & 0xff, (prev >>> 16) & 0xff, (prev >>> 24) & 0xff],
+        [
+          prev & 0xff,
+          (prev >>> 8) & 0xff,
+          (prev >>> 16) & 0xff,
+          (prev >>> 24) & 0xff,
+        ],
         DevMgmt.SetDateTimeRsp,
       );
     },
@@ -329,8 +382,14 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
     name: 'Active configuration round-trips (link mode change, then restored)',
     async run(c) {
       const get = async () =>
-        (await c.request(Sap.WMBus, WMBus.GetActiveConfigReq, [], WMBus.GetActiveConfigRsp))
-          .payload;
+        (
+          await c.request(
+            Sap.WMBus,
+            WMBus.GetActiveConfigReq,
+            [],
+            WMBus.GetActiveConfigRsp,
+          )
+        ).payload;
       const original = await get();
       assertEqual(original[0], GwStatus.Ok, 'status');
       assertEqual(original.length, 12, 'expected status + 11-byte config');
@@ -350,7 +409,12 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
       assertEqual(after[0], modified[0], 'link mode should reflect the change');
 
       // restore the original active configuration
-      await c.request(Sap.WMBus, WMBus.SetActiveConfigReq, config, WMBus.SetActiveConfigRsp);
+      await c.request(
+        Sap.WMBus,
+        WMBus.SetActiveConfigReq,
+        config,
+        WMBus.SetActiveConfigRsp,
+      );
     },
   },
   {
@@ -371,16 +435,32 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
     async run(c) {
       // snapshot the current RAM list
       const before = readDeviceListRaw(
-        (await c.request(Sap.WMBus, WMBus.ReadDeviceListReq, [0, 10], WMBus.ReadDeviceListRsp))
-          .payload,
+        (
+          await c.request(
+            Sap.WMBus,
+            WMBus.ReadDeviceListReq,
+            [0, 10],
+            WMBus.ReadDeviceListRsp,
+          )
+        ).payload,
       );
 
-      await c.request(Sap.WMBus, WMBus.ClearDeviceListReq, [], WMBus.ClearDeviceListRsp);
+      await c.request(
+        Sap.WMBus,
+        WMBus.ClearDeviceListReq,
+        [],
+        WMBus.ClearDeviceListRsp,
+      );
 
       const item = [
-        0x34, 0x12, // manufacturer id (LSB)
-        0xbc, 0x9a, 0x78, 0x56, // device id (LSB)
-        0x01, 0x07, // version, type
+        0x34,
+        0x12, // manufacturer id (LSB)
+        0xbc,
+        0x9a,
+        0x78,
+        0x56, // device id (LSB)
+        0x01,
+        0x07, // version, type
         ...new Array(16).fill(0xaa), // key
       ];
       const append = await c.request(
@@ -394,8 +474,14 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
       assertEqual(ar.u16le(), 1, 'one item appended');
 
       const read = readDeviceListRaw(
-        (await c.request(Sap.WMBus, WMBus.ReadDeviceListReq, [0, 10], WMBus.ReadDeviceListRsp))
-          .payload,
+        (
+          await c.request(
+            Sap.WMBus,
+            WMBus.ReadDeviceListReq,
+            [0, 10],
+            WMBus.ReadDeviceListRsp,
+          )
+        ).payload,
       );
       assert(read.length >= 24, 'expected one 24-byte item back');
       assertEqual(
@@ -405,7 +491,12 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
       );
 
       // restore the original RAM list
-      await c.request(Sap.WMBus, WMBus.ClearDeviceListReq, [], WMBus.ClearDeviceListRsp);
+      await c.request(
+        Sap.WMBus,
+        WMBus.ClearDeviceListReq,
+        [],
+        WMBus.ClearDeviceListRsp,
+      );
       if (before.length >= 24) {
         await c.request(
           Sap.WMBus,
@@ -444,15 +535,25 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
       const makeItem = (): number[] => {
         const id = nextId++;
         return [
-          0x34, 0x12, // manufacturer id
-          id & 0xff, (id >> 8) & 0xff, 0x00, 0x00, // device id (unique)
-          0x01, 0x07, // version, type
+          0x34,
+          0x12, // manufacturer id
+          id & 0xff,
+          (id >> 8) & 0xff,
+          0x00,
+          0x00, // device id (unique)
+          0x01,
+          0x07, // version, type
           ...new Array(16).fill(id & 0xff), // key
         ];
       };
 
       const before = await readAll();
-      await c.request(Sap.WMBus, WMBus.ClearDeviceListReq, [], WMBus.ClearDeviceListRsp);
+      await c.request(
+        Sap.WMBus,
+        WMBus.ClearDeviceListReq,
+        [],
+        WMBus.ClearDeviceListRsp,
+      );
       try {
         // Append a few at a time until the device reports it is full. This is
         // capacity-agnostic (works for any finite list size) and bounded so a
@@ -482,9 +583,16 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
             break;
           }
           assertEqual(status, GwStatus.Ok, 'append status');
-          assertEqual(appended, BATCH, 'a non-truncated append stores every item');
+          assertEqual(
+            appended,
+            BATCH,
+            'a non-truncated append stores every item',
+          );
         }
-        assert(sawTruncation, 'expected the device list to overflow within 256 items');
+        assert(
+          sawTruncation,
+          'expected the device list to overflow within 256 items',
+        );
 
         // Everything accepted before the overflow must read back intact.
         const stored = await readAll();
@@ -495,7 +603,12 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
         );
       } finally {
         // restore the original RAM list
-        await c.request(Sap.WMBus, WMBus.ClearDeviceListReq, [], WMBus.ClearDeviceListRsp);
+        await c.request(
+          Sap.WMBus,
+          WMBus.ClearDeviceListReq,
+          [],
+          WMBus.ClearDeviceListRsp,
+        );
         if (before.length >= 24) {
           await c.request(
             Sap.WMBus,
@@ -545,8 +658,14 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
     name: 'Receives WM-Bus telegram notification (0x20) when receiver is enabled',
     async run(c) {
       const getConfig = async () =>
-        (await c.request(Sap.WMBus, WMBus.GetActiveConfigReq, [], WMBus.GetActiveConfigRsp))
-          .payload;
+        (
+          await c.request(
+            Sap.WMBus,
+            WMBus.GetActiveConfigReq,
+            [],
+            WMBus.GetActiveConfigRsp,
+          )
+        ).payload;
 
       const original = await getConfig();
       assertEqual(original[0], GwStatus.Ok, 'get active config status');
@@ -555,11 +674,21 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
 
       const modified = [...config];
       modified[0] = 0x02; // T-Mode
-      await c.request(Sap.WMBus, WMBus.SetActiveConfigReq, modified, WMBus.SetActiveConfigRsp);
+      await c.request(
+        Sap.WMBus,
+        WMBus.SetActiveConfigReq,
+        modified,
+        WMBus.SetActiveConfigRsp,
+      );
 
       try {
         // Real gateways may need a few seconds until a telegram arrives.
-        const evt = await c.waitFor(Sap.WMBus, WMBus.RxMessageInd, 15000, m => m.payload.length >= 9);
+        const evt = await c.waitFor(
+          Sap.WMBus,
+          WMBus.RxMessageInd,
+          15000,
+          m => m.payload.length >= 9,
+        );
         const r = new ByteReader(evt.payload);
         r.u32le(); // timestamp UTC
         r.u8(); // decryption status
@@ -581,10 +710,22 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
         );
 
         const packet = r.rest();
-        assert(packet.length >= 10, 'WM-Bus packet should include at least L/C/address header');
-        assertEqual(packet.length, (packet[0] ?? 0) + 1, 'L-field should match packet length');
+        assert(
+          packet.length >= 10,
+          'WM-Bus packet should include at least L/C/address header',
+        );
+        assertEqual(
+          packet.length,
+          (packet[0] ?? 0) + 1,
+          'L-field should match packet length',
+        );
       } finally {
-        await c.request(Sap.WMBus, WMBus.SetActiveConfigReq, config, WMBus.SetActiveConfigRsp);
+        await c.request(
+          Sap.WMBus,
+          WMBus.SetActiveConfigReq,
+          config,
+          WMBus.SetActiveConfigRsp,
+        );
       }
     },
   },
@@ -699,11 +840,18 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
       // Obvious test frame: Manufacturer ID = 0 and Device ID = 0.
       const content = [
         0x44, // C-field (SND-NR)
-        0x00, 0x00, // manufacturer id = 0
-        0x00, 0x00, 0x00, 0x00, // device id = 0
-        0x00, 0x00, // version, type
+        0x00,
+        0x00, // manufacturer id = 0
+        0x00,
+        0x00,
+        0x00,
+        0x00, // device id = 0
+        0x00,
+        0x00, // version, type
         0x7a, // CI-field
-        0x01, 0x02, 0x03, // a little application data
+        0x01,
+        0x02,
+        0x03, // a little application data
       ];
       const rsp = await c.request(
         Sap.WMBus,
@@ -714,7 +862,11 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
       assertEqual(rsp.payload[0], GwStatus.Ok, 'send message status');
       try {
         // A Tx notification follows when WM-Bus Tx Notification is enabled.
-        const tx = await c.waitFor(Sap.WMBus, WMBus.MessageTransmittedInd, 5000);
+        const tx = await c.waitFor(
+          Sap.WMBus,
+          WMBus.MessageTransmittedInd,
+          5000,
+        );
         assertEqual(
           tx.payload[tx.payload.length - 1],
           0x00,
@@ -731,8 +883,14 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
     name: 'After disabling receiver, no WM-Bus telegram notification arrives for 10s',
     async run(c) {
       const getConfig = async () =>
-        (await c.request(Sap.WMBus, WMBus.GetActiveConfigReq, [], WMBus.GetActiveConfigRsp))
-          .payload;
+        (
+          await c.request(
+            Sap.WMBus,
+            WMBus.GetActiveConfigReq,
+            [],
+            WMBus.GetActiveConfigRsp,
+          )
+        ).payload;
 
       const original = await getConfig();
       assertEqual(original[0], GwStatus.Ok, 'get active config status');
@@ -741,11 +899,21 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
 
       const enabled = [...config];
       enabled[0] = 0x02; // T-Mode ON
-      await c.request(Sap.WMBus, WMBus.SetActiveConfigReq, enabled, WMBus.SetActiveConfigRsp);
+      await c.request(
+        Sap.WMBus,
+        WMBus.SetActiveConfigReq,
+        enabled,
+        WMBus.SetActiveConfigRsp,
+      );
 
       try {
         // Prove the device is actively receiving first.
-        await c.waitFor(Sap.WMBus, WMBus.RxMessageInd, 15000, m => m.payload.length >= 9);
+        await c.waitFor(
+          Sap.WMBus,
+          WMBus.RxMessageInd,
+          15000,
+          m => m.payload.length >= 9,
+        );
 
         const disabled = [...enabled];
         disabled[0] = 0x00; // Link Mode Off => receiver off
@@ -759,7 +927,12 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
         // Once listening is disabled there should be no new Rx telegram events.
         await c.expectNoMessage(Sap.WMBus, WMBus.RxMessageInd, 10000);
       } finally {
-        await c.request(Sap.WMBus, WMBus.SetActiveConfigReq, config, WMBus.SetActiveConfigRsp);
+        await c.request(
+          Sap.WMBus,
+          WMBus.SetActiveConfigReq,
+          config,
+          WMBus.SetActiveConfigRsp,
+        );
       }
     },
   },

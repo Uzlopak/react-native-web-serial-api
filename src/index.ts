@@ -14,5 +14,8 @@ export {Serial, SerialPort} from './WebSerial';
 
 import * as UsbSerial from './UsbSerial';
 
-export {EventImpl as Event, EventTargetImpl as EventTarget} from './lib/event-target';
+export {
+  EventImpl as Event,
+  EventTargetImpl as EventTarget,
+} from './lib/event-target';
 export {UsbSerial};

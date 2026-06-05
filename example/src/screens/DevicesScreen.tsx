@@ -13,6 +13,7 @@ import type {
   SerialTransport,
 } from 'react-native-web-serial-api';
 import {AppBar} from '../components/AppBar';
+import {PromptDialog} from '../components/PromptDialog';
 import {colors} from '../theme';
 
 type Props = {
@@ -26,6 +27,9 @@ type Props = {
   onToggleDemo: () => void;
   onOpenSelfTest: () => void;
   onSelect: (port: SerialPort) => void;
+  /** WebSocket bridge URL when remote-serial mode is active, else null. */
+  remoteUrl: string | null;
+  onSetRemote: (url: string | null) => void;
 };
 
 // One row in the device list: a probed USB-serial port, which may or may not be
@@ -68,9 +72,12 @@ export function DevicesScreen({
   onToggleDemo,
   onOpenSelfTest,
   onSelect,
+  remoteUrl,
+  onSetRemote,
 }: Props) {
   const [rows, setRows] = React.useState<DeviceRow[]>([]);
   const [error, setError] = React.useState<string | null>(null);
+  const [showRemotePrompt, setShowRemotePrompt] = React.useState(false);
 
   const refresh = React.useCallback(async () => {
     setError(null);
@@ -100,6 +107,7 @@ export function DevicesScreen({
         }),
       );
     } catch (e: any) {
+      setRows([]);
       setError(e?.message ?? String(e));
     }
   }, [serial, transport]);
@@ -189,6 +197,20 @@ export function DevicesScreen({
     };
   }, [refresh]);
 
+  // Remote WebSocket mode has no native attach/detach events; poll lightly so
+  // the list reflects server availability changes without manual refresh.
+  React.useEffect(() => {
+    if (!remoteUrl) {
+      return;
+    }
+    const timer = setInterval(() => {
+      void refresh();
+    }, 1500);
+    return () => {
+      clearInterval(timer);
+    };
+  }, [remoteUrl, refresh]);
+
   return (
     <View style={styles.container}>
       <AppBar
@@ -203,6 +225,16 @@ export function DevicesScreen({
             checked: demoMode,
             onPress: onToggleDemo,
           },
+          {
+            key: 'remote',
+            title: 'Remote serial (WebSocket)',
+            checkable: true,
+            checked: remoteUrl !== null,
+            onPress: () =>
+              remoteUrl !== null
+                ? onSetRemote(null)
+                : setShowRemotePrompt(true),
+          },
           {key: 'selftest', title: 'Self test…', onPress: onOpenSelfTest},
         ]}
       />
@@ -215,6 +247,10 @@ export function DevicesScreen({
         <Text style={styles.demoBanner}>
           Virtual device mode — no hardware required
         </Text>
+      ) : null}
+
+      {remoteUrl ? (
+        <Text style={styles.demoBanner}>Remote serial — {remoteUrl}</Text>
       ) : null}
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -242,6 +278,19 @@ export function DevicesScreen({
             </Text>
           </TouchableOpacity>
         )}
+      />
+
+      <PromptDialog
+        visible={showRemotePrompt}
+        title="Remote serial (WebSocket)"
+        placeholder="ws://localhost:8080"
+        initialValue={remoteUrl ?? 'ws://localhost:8080'}
+        onSubmit={url => {
+          if (url) {
+            onSetRemote(url);
+          }
+        }}
+        onClose={() => setShowRemotePrompt(false)}
       />
     </View>
   );

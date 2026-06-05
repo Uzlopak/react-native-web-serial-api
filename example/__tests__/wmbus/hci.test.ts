@@ -2,7 +2,7 @@
  * @format
  */
 import {describe, expect, it} from '@jest/globals';
-import {DevMgmt, Sap, decodeHci, encodeHci} from '../../src/devices/wmbus/hci';
+import {DevMgmt, decodeHci, encodeHci, Sap} from '../../src/devices/wmbus/hci';
 import {slipEncode} from '../../src/devices/wmbus/slip';
 
 describe('HCI message encode/decode', () => {
@@ -25,7 +25,11 @@ describe('HCI message encode/decode', () => {
 
   it('round-trips an arbitrary message', () => {
     const frame = encodeHci(Sap.WMBus, 0x20, [1, 2, 3]);
-    expect(decodeHci(frame)).toEqual({sap: 0x09, msg: 0x20, payload: [1, 2, 3]});
+    expect(decodeHci(frame)).toEqual({
+      sap: 0x09,
+      msg: 0x20,
+      payload: [1, 2, 3],
+    });
   });
 
   it('rejects a frame with a corrupted CRC', () => {

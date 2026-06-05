@@ -6,12 +6,7 @@ import {SLIP, SlipDecoder, slipEncode} from '../../src/devices/wmbus/slip';
 
 describe('SLIP framing', () => {
   it('wraps the payload in END … END', () => {
-    expect(slipEncode([0x01, 0x02])).toEqual([
-      SLIP.END,
-      0x01,
-      0x02,
-      SLIP.END,
-    ]);
+    expect(slipEncode([0x01, 0x02])).toEqual([SLIP.END, 0x01, 0x02, SLIP.END]);
   });
 
   it('escapes END and ESC bytes in the payload', () => {

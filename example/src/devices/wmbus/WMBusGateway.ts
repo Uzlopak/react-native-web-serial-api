@@ -9,34 +9,39 @@
  */
 import {SerialDevice} from 'react-native-web-serial-api/testing';
 import {ByteReader, ByteWriter} from './bytes';
-import {addressFromPacket, readAddress, writeAddress, type WMBusAddress} from './frame';
+import {
+  addressFromPacket,
+  readAddress,
+  type WMBusAddress,
+  writeAddress,
+} from './frame';
 import {
   ApprovalStatus,
   ApprovalTest,
   DevMgmt,
   DevStatus,
+  decodeHci,
+  encodeHci,
   GwStatus,
   type HciMessage,
   Sap,
   WMBus,
-  decodeHci,
-  encodeHci,
 } from './hci';
 import {FIRMWARE, MODULES, type ModuleVariant} from './modules';
 import {
   CONFIG_OPT_ADDRESS_FILTER,
   CONFIG_OPT_RX_NOTIFY,
   CONFIG_OPT_TX_NOTIFY,
+  cloneItems,
   DEFAULT_CONFIG,
   DEVICE_ITEM_BYTES,
   type DeviceListItem,
-  type GatewayConfig,
-  MAX_DEVICE_LIST_ITEMS,
-  cloneItems,
   decodeConfig,
   decodeDeviceItem,
   encodeConfig,
   encodeDeviceItem,
+  type GatewayConfig,
+  MAX_DEVICE_LIST_ITEMS,
   sameAddress,
 } from './nvm';
 import {SlipDecoder, slipEncode} from './slip';
@@ -56,12 +61,12 @@ const OPT_STARTUP_EVENT = 1 << 4;
  * reported as its actual link mode (default T-Mode).
  */
 const PACKET_INFO_BY_LINK_MODE: Record<number, number> = {
-  0x01: 0x01, // S-Mode
-  0x02: 0x02, // T-Mode
-  0x03: 0x02, // CT-Mode receiver → report received frame as T-Mode
-  0x04: 0x04, // C-Mode 50 kbps (Format A)
-  0x05: 0x05, // C-Mode 100 kbps (Format A)
-  0x06: 0x06, // Enhanced T-Mode
+  1: 0x01, // S-Mode
+  2: 0x02, // T-Mode
+  3: 0x02, // CT-Mode receiver → report received frame as T-Mode
+  4: 0x04, // C-Mode 50 kbps (Format A)
+  5: 0x05, // C-Mode 100 kbps (Format A)
+  6: 0x06, // Enhanced T-Mode
 };
 
 /** PI_* packet-info code for a given LM_* link mode (unknown → passthrough). */
@@ -131,7 +136,11 @@ export class WMBusGateway extends SerialDevice {
 
   constructor(
     variant: ModuleVariant = 'iU891A-XL',
-    usb: {usbVendorId?: number; usbProductId?: number; serialNumber?: string} = {},
+    usb: {
+      usbVendorId?: number;
+      usbProductId?: number;
+      serialNumber?: string;
+    } = {},
   ) {
     super();
     const info = MODULES[variant];
@@ -319,10 +328,18 @@ export class WMBusGateway extends SerialDevice {
         this.sendMessage(Sap.DevMgmt, DevMgmt.PingRsp, [DevStatus.Ok]);
         return;
       case DevMgmt.GetDeviceInfoReq:
-        this.sendMessage(Sap.DevMgmt, DevMgmt.GetDeviceInfoRsp, this.#deviceInfo());
+        this.sendMessage(
+          Sap.DevMgmt,
+          DevMgmt.GetDeviceInfoRsp,
+          this.#deviceInfo(),
+        );
         return;
       case DevMgmt.GetFwInfoReq:
-        this.sendMessage(Sap.DevMgmt, DevMgmt.GetFwInfoRsp, this.#firmwareInfo());
+        this.sendMessage(
+          Sap.DevMgmt,
+          DevMgmt.GetFwInfoRsp,
+          this.#firmwareInfo(),
+        );
         return;
       case DevMgmt.RestartReq:
         this.sendMessage(Sap.DevMgmt, DevMgmt.RestartRsp, [DevStatus.Ok]);
@@ -358,7 +375,9 @@ export class WMBusGateway extends SerialDevice {
         const values = r.u32le();
         this.#systemOptions =
           ((this.#systemOptions & ~mask) | (values & mask)) >>> 0;
-        this.sendMessage(Sap.DevMgmt, DevMgmt.SetSystemOptionsRsp, [DevStatus.Ok]);
+        this.sendMessage(Sap.DevMgmt, DevMgmt.SetSystemOptionsRsp, [
+          DevStatus.Ok,
+        ]);
         return;
       }
       case DevMgmt.GetSystemOptionsReq:
@@ -466,7 +485,11 @@ export class WMBusGateway extends SerialDevice {
         return;
       }
       case WMBus.SendMessageReq:
-        this.#handleSend(m.payload, WMBus.SendMessageRsp, WMBus.MessageTransmittedInd);
+        this.#handleSend(
+          m.payload,
+          WMBus.SendMessageRsp,
+          WMBus.MessageTransmittedInd,
+        );
         return;
       case WMBus.EncryptSendReq:
         this.#handleEncryptSend(
@@ -480,7 +503,11 @@ export class WMBusGateway extends SerialDevice {
           this.#fail(WMBus.SendPacketRsp, GwStatus.Unsupported);
           return;
         }
-        this.#handleSend(m.payload, WMBus.SendPacketRsp, WMBus.MessageTransmittedInd);
+        this.#handleSend(
+          m.payload,
+          WMBus.SendPacketRsp,
+          WMBus.MessageTransmittedInd,
+        );
         return;
       case WMBus.EncryptSendPacketReq: // Encrypt-and-Send-II (iU891A-XL only)
         if (!MODULES[this.variant].hasStoredAddress) {
@@ -495,7 +522,11 @@ export class WMBusGateway extends SerialDevice {
         );
         return;
       case WMBus.GetStatusReportReq:
-        this.sendMessage(Sap.WMBus, WMBus.GetStatusReportRsp, this.#statusReport());
+        this.sendMessage(
+          Sap.WMBus,
+          WMBus.GetStatusReportRsp,
+          this.#statusReport(),
+        );
         return;
       case WMBus.ResetStatusReportReq:
         this.#counters.rxPkt = 0;

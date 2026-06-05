@@ -13,18 +13,20 @@ import {ByteReader} from '../../src/devices/wmbus/bytes';
 import {readAddress} from '../../src/devices/wmbus/frame';
 import {
   DevMgmt,
+  decodeHci,
+  encodeHci,
   type HciMessage,
   Sap,
   WMBus,
-  decodeHci,
-  encodeHci,
 } from '../../src/devices/wmbus/hci';
 import {SlipDecoder, slipEncode} from '../../src/devices/wmbus/slip';
 import {WMBusGateway} from '../../src/devices/wmbus/WMBusGateway';
 import {WMBusMeter} from '../../src/devices/wmbus/WMBusMeter';
 
 /** Set Active Configuration payload: link mode T (2), options 0x0E, defaults. */
-const ENABLE_T_MODE = [0x02, 0x0e, 0x00, 0x00, 0x00, 0x32, 0x00, 0x88, 0x13, 0x00, 0x00];
+const ENABLE_T_MODE = [
+  0x02, 0x0e, 0x00, 0x00, 0x00, 0x32, 0x00, 0x88, 0x13, 0x00, 0x00,
+];
 
 class Host {
   #reader: ReadableStreamDefaultReader<Uint8Array>;
@@ -41,7 +43,9 @@ class Host {
   }
 
   async send(sap: number, msg: number, payload: number[] = []): Promise<void> {
-    await this.#writer.write(Uint8Array.from(slipEncode(encodeHci(sap, msg, payload))));
+    await this.#writer.write(
+      Uint8Array.from(slipEncode(encodeHci(sap, msg, payload))),
+    );
   }
 
   async recv(): Promise<HciMessage> {
@@ -58,7 +62,11 @@ class Host {
     return this.#pending.shift() as HciMessage;
   }
 
-  async request(sap: number, msg: number, payload: number[] = []): Promise<HciMessage> {
+  async request(
+    sap: number,
+    msg: number,
+    payload: number[] = [],
+  ): Promise<HciMessage> {
     await this.send(sap, msg, payload);
     return this.recv();
   }

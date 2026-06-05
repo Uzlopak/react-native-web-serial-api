@@ -4,7 +4,7 @@
  * address + 16-byte key, the key stored MSB-first). See spec p25, p31-33.
  */
 import {ByteReader, ByteWriter} from './bytes';
-import {type WMBusAddress, readAddress, writeAddress} from './frame';
+import {readAddress, type WMBusAddress, writeAddress} from './frame';
 
 export type GatewayConfig = {
   linkMode: number;

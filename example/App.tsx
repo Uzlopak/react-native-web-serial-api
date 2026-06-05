@@ -2,6 +2,7 @@ import React from 'react';
 import {StatusBar, StyleSheet, View} from 'react-native';
 import type {SerialPort, SerialTransport} from 'react-native-web-serial-api';
 import {Serial, serial, UsbSerial} from 'react-native-web-serial-api';
+import {WebSocketSerialTransport} from 'react-native-web-serial-api/websocket';
 import {ConnectScreen} from './src/screens/ConnectScreen';
 import {DevicesScreen} from './src/screens/DevicesScreen';
 import {SelfTestScreen} from './src/screens/SelfTestScreen';
@@ -32,6 +33,7 @@ function App(): React.JSX.Element {
   const [settings, setSettings] =
     React.useState<ConnectionSettings>(DEFAULT_SETTINGS);
   const [demoMode, setDemoMode] = React.useState(false);
+  const [remoteUrl, setRemoteUrl] = React.useState<string | null>(null);
 
   // In demo mode the whole app talks to an in-memory VirtualSerialTransport via
   // a dedicated Serial instance — no USB hardware required. A fresh transport is
@@ -42,8 +44,25 @@ function App(): React.JSX.Element {
     return {transport, serial: new Serial(transport)};
   }, [demoMode]);
 
-  const activeSerial = demo ? demo.serial : serial;
-  const activeTransport = demo ? demo.transport : nativeTransport();
+  // Remote mode bridges to a real serial port on another machine over a
+  // WebSocket (run `expose-serial-websocket` there). Same SerialTransport seam,
+  // so the rest of the app is unchanged.
+  const remote = React.useMemo(() => {
+    if (!remoteUrl) return null;
+    try {
+      const transport = new WebSocketSerialTransport(remoteUrl);
+      return {transport, serial: new Serial(transport)};
+    } catch {
+      return null;
+    }
+  }, [remoteUrl]);
+
+  const activeSerial = remote ? remote.serial : demo ? demo.serial : serial;
+  const activeTransport = remote
+    ? remote.transport
+    : demo
+      ? demo.transport
+      : nativeTransport();
 
   // Devices -> Connect form
   const selectPort = (p: SerialPort) => {
@@ -67,7 +86,16 @@ function App(): React.JSX.Element {
   const toggleDemo = () => {
     setPort(null);
     setScreen('devices');
+    setRemoteUrl(null);
     setDemoMode(d => !d);
+  };
+
+  // Demo and remote modes are mutually exclusive.
+  const setRemote = (url: string | null) => {
+    setPort(null);
+    setScreen('devices');
+    setDemoMode(false);
+    setRemoteUrl(url);
   };
 
   return (
@@ -99,6 +127,8 @@ function App(): React.JSX.Element {
           onToggleDemo={toggleDemo}
           onOpenSelfTest={() => setScreen('selftest')}
           onSelect={selectPort}
+          remoteUrl={remoteUrl}
+          onSetRemote={setRemote}
         />
       )}
     </View>

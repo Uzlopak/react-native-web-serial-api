@@ -2,13 +2,9 @@ import {describe, expect, it, jest} from '@jest/globals';
 
 type Globals = Record<string, unknown>;
 
-function withPatchedGlobal<T>(
-  key: string,
-  value: unknown,
-  run: () => T,
-): T {
+function withPatchedGlobal<T>(key: string, value: unknown, run: () => T): T {
   const g = globalThis as Globals;
-  const had = Object.prototype.hasOwnProperty.call(g, key);
+  const had = Object.hasOwn(g, key);
   const prev = g[key];
   if (value === undefined) {
     delete g[key];

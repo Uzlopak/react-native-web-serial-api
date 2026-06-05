@@ -1,11 +1,11 @@
+import {DOMException} from './lib/dom-exception';
+import {Event, EventTarget, setEventParent} from './lib/event-target';
+import {createDeferredPromise} from './lib/promise';
 import {
   ByteLengthQueuingStrategyImpl as ByteLengthQueuingStrategy,
   ReadableStreamImpl as ReadableStream,
   WritableStreamImpl as WritableStream,
 } from './lib/web-streams';
-import {DOMException} from './lib/dom-exception';
-import {Event, EventTarget, setEventParent} from './lib/event-target';
-import {createDeferredPromise} from './lib/promise';
 import type {
   ConnectEvent,
   DataEvent,
