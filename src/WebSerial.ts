@@ -212,6 +212,29 @@ function flowControlToNative(flowControl: FlowControlType): 'RTS_CTS' | 'NONE' {
 }
 
 /**
+ * Normalise a writable chunk to a plain byte array. The Web Serial writable
+ * accepts any BufferSource — a bare `ArrayBuffer` or any `ArrayBufferView`
+ * (`DataView`, typed arrays, including views with a non-zero `byteOffset`). A
+ * naive `Array.from(chunk)` only works for the iterable typed arrays and
+ * silently yields `[]` for an `ArrayBuffer`/`DataView`, so handle each shape.
+ */
+function bufferSourceToBytes(chunk: ArrayBufferView | ArrayBuffer): number[] {
+  if (chunk instanceof Uint8Array) {
+    return Array.from(chunk);
+  }
+  if (ArrayBuffer.isView(chunk)) {
+    return Array.from(
+      new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength),
+    );
+  }
+  if (chunk instanceof ArrayBuffer) {
+    return Array.from(new Uint8Array(chunk));
+  }
+  // Best-effort fallback for any other array-like (e.g. a plain number[]).
+  return Array.from(chunk as unknown as ArrayLike<number>);
+}
+
+/**
  * Methods on this interface typically complete asynchronously, queuing work on
  * the serial port task source.
  *
@@ -436,7 +459,15 @@ export class SerialPort extends EventTarget {
               event.deviceId === deviceId &&
               event.portNumber === portNumber
             ) {
-              controller.enqueue(new Uint8Array(event.data));
+              try {
+                controller.enqueue(new Uint8Array(event.data));
+              } catch {
+                // The stream may already be closing/closed — e.g. a data event
+                // racing cancel()/close(), where the stream is closed but this
+                // subscription is not yet torn down. Dropping the chunk is
+                // correct (the consumer has stopped reading) and avoids throwing
+                // out of the transport's event-dispatch loop.
+              }
             }
           });
 
@@ -505,12 +536,13 @@ export class SerialPort extends EventTarget {
           self.#writableController = controller;
         },
         async write(chunk) {
+          const bytes = bufferSourceToBytes(chunk);
           try {
             await self.#usb.write(
               deviceId,
               portNumber,
-              Array.from(chunk),
-              self.#writeTimeoutFor(chunk.length),
+              bytes,
+              self.#writeTimeoutFor(bytes.length),
             );
           } catch (e) {
             // If the port was disconnected, set this.[[writeFatal]] to true.

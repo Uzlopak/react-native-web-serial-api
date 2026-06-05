@@ -36,6 +36,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class NativeUsbSerialModule extends NativeUsbSerialSpec {
 
@@ -54,16 +55,21 @@ public class NativeUsbSerialModule extends NativeUsbSerialSpec {
     private final Map<String, UsbDeviceConnection> openConnections = new ConcurrentHashMap<>();
     private final Map<String, SerialInputOutputManager> ioManagers = new ConcurrentHashMap<>();
 
-    // key: requestCode
+    // key: requestCode. requestPermission() is reachable from both the native
+    // modules thread (direct JS call) and the main thread (onActivityResult ->
+    // requestPermission), so the counter must be atomic to avoid two callers
+    // colliding on a request code and clobbering each other's pending promise.
     private final Map<Integer, Promise> pendingPermissions = new ConcurrentHashMap<>();
-    private int nextRequestCode = 0;
+    private final AtomicInteger nextRequestCode = new AtomicInteger(0);
 
     // Resumes blocking USB work (open/setParameters) off the main thread when a
     // permission grant arrives on the broadcast-receiver (main) thread.
     private final ExecutorService backgroundExecutor = Executors.newSingleThreadExecutor();
 
     private static final int PORT_PICKER_REQUEST_CODE = 0xAB8465;
-    private Promise pendingPortPickerPromise = null;
+    // Written from showPortPicker (module thread), read/cleared from
+    // onActivityResult (main thread) — volatile for cross-thread visibility.
+    private volatile Promise pendingPortPickerPromise = null;
 
     private final ActivityEventListener activityEventListener = new BaseActivityEventListener() {
         @Override
@@ -700,7 +706,7 @@ public class NativeUsbSerialModule extends NativeUsbSerialSpec {
                 return;
             }
 
-            requestCode = nextRequestCode++;
+            requestCode = nextRequestCode.getAndIncrement();
             pendingPermissions.put(requestCode, promise);
 
             Intent intent = new Intent(ACTION_USB_PERMISSION);
@@ -771,6 +777,12 @@ public class NativeUsbSerialModule extends NativeUsbSerialSpec {
         } catch (ActivityNotFoundException e) {
             pendingPortPickerPromise = null;
             promise.reject("ACTIVITY_NOT_FOUND", e.getMessage(), e);
+        } catch (Exception e) {
+            // Any other failure to launch must also clear the pending slot,
+            // otherwise the picker is wedged forever (every future call rejects
+            // with PICKER_ALREADY_OPEN) and this promise never settles.
+            pendingPortPickerPromise = null;
+            promise.reject("PICKER_LAUNCH_FAILED", e.getMessage(), e);
         }
     }
 

@@ -96,24 +96,39 @@ public class PortPickerActivity extends AppCompatActivity {
             return drivers;
         }
 
-        // Guard against mismatched array lengths to avoid ArrayIndexOutOfBoundsException
-        int filterCount = Math.min(filterVendorIds.length,
-                filterProductIds != null ? filterProductIds.length : 0);
-
         List<UsbSerialDriver> filtered = new ArrayList<>();
         for (UsbSerialDriver driver : drivers) {
             int vid = driver.getDevice().getVendorId();
             int pid = driver.getDevice().getProductId();
-            for (int i = 0; i < filterCount; i++) {
-                boolean vidMatch = vid == filterVendorIds[i];
-                boolean pidMatch = filterProductIds[i] == -1 || pid == filterProductIds[i];
-                if (vidMatch && pidMatch) {
-                    filtered.add(driver);
-                    break;
-                }
+            if (matchesAnyFilter(vid, pid, filterVendorIds, filterProductIds)) {
+                filtered.add(driver);
             }
         }
         return filtered;
+    }
+
+    /**
+     * Whether a device with the given vendor/product id matches any of the
+     * parallel {@code vendorIds}/{@code productIds} filter arrays. A
+     * {@code productId} of -1 is a vendor-only wildcard. Mismatched array
+     * lengths are tolerated (the shorter length wins), and empty/no filters
+     * match everything. Pure and Android-free so it can be unit tested directly.
+     */
+    static boolean matchesAnyFilter(int vid, int pid, int[] vendorIds, int[] productIds) {
+        if (vendorIds == null || vendorIds.length == 0) {
+            return true;
+        }
+        // Guard against mismatched array lengths to avoid ArrayIndexOutOfBoundsException
+        int filterCount = Math.min(vendorIds.length,
+                productIds != null ? productIds.length : 0);
+        for (int i = 0; i < filterCount; i++) {
+            boolean vidMatch = vid == vendorIds[i];
+            boolean pidMatch = productIds[i] == -1 || pid == productIds[i];
+            if (vidMatch && pidMatch) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void showPickerDialog() {

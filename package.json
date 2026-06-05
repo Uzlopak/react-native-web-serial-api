@@ -28,6 +28,7 @@
     "react-native.config.js",
     "TESTING.md",
     "!android/build",
+    "!android/src/test",
     "!**/__tests__",
     "!**/__fixtures__",
     "!**/__mocks__",
@@ -42,6 +43,7 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
+    "test:android": "cd example/android && ./gradlew :react-native-web-serial-api:testDebugUnitTest",
     "test:emulator:e2e": "npm --prefix example run e2e",
     "test:host+emulator": "node ./node_modules/jest/bin/jest.js && npm --prefix example run e2e"
   },

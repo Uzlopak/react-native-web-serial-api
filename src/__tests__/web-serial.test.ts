@@ -1010,4 +1010,133 @@ describe('SerialPort review-hardening fixes', () => {
     writer.releaseLock();
     await port.close();
   });
+
+  it('writes any BufferSource chunk, not just Uint8Array', async () => {
+    const {serial, device} = setup(new SilentDevice(FTDI));
+    const [port] = await serial.getPorts();
+    await port.open({baudRate: 9600});
+    const writer = port.writable!.getWriter();
+
+    // Per the Web Serial spec the writable accepts a BufferSource. A bare
+    // ArrayBuffer and a DataView are valid chunks but are NOT array-like, so a
+    // naive Array.from() would silently send zero bytes.
+    const ab = new Uint8Array([1, 2, 3]).buffer;
+    await writer.write(ab as unknown as Uint8Array);
+
+    // DataView over a non-zero byteOffset slice -> bytes 9,8,7
+    const dvBacking = new Uint8Array([0, 0, 9, 8, 7]);
+    const dv = new DataView(dvBacking.buffer, 2, 3);
+    await writer.write(dv as unknown as Uint8Array);
+
+    // A typed-array view with a byteOffset must respect offset/length -> 4,5
+    const sub = new Uint8Array([0, 0, 4, 5]).subarray(2);
+    await writer.write(sub);
+
+    writer.releaseLock();
+    expect(device.written).toEqual([
+      [1, 2, 3],
+      [9, 8, 7],
+      [4, 5],
+    ]);
+    await port.close();
+  });
+
+  it('remaps a reattached device and supports reopen + I/O on the new deviceId', async () => {
+    const {serial, device} = setup(new EchoDevice(FTDI));
+    const [port] = await serial.getPorts();
+    const firstDeviceId = device.deviceId;
+    await port.open({baudRate: 9600});
+
+    // Echo works on the first physical connection.
+    let writer = port.writable!.getWriter();
+    let reader = port.readable!.getReader();
+    await writer.write(Uint8Array.from([10, 20]));
+    expect(Array.from((await reader.read()).value ?? [])).toEqual([10, 20]);
+    writer.releaseLock();
+    reader.releaseLock();
+
+    // Unplug while open, then replug. Android assigns a brand-new deviceId on
+    // re-attach; the polyfill must remap the same SerialPort onto it.
+    device.loseDevice();
+    await Promise.resolve();
+    device.attach();
+    await Promise.resolve();
+
+    expect(device.deviceId).not.toBe(firstDeviceId);
+    const [portAfter] = await serial.getPorts();
+    expect(portAfter).toBe(port);
+    expect(port.connected).toBe(false);
+
+    // Reopen on the NEW deviceId and confirm I/O still flows end-to-end.
+    await port.open({baudRate: 9600});
+    writer = port.writable!.getWriter();
+    reader = port.readable!.getReader();
+    await writer.write(Uint8Array.from([30, 40]));
+    expect(Array.from((await reader.read()).value ?? [])).toEqual([30, 40]);
+    writer.releaseLock();
+    reader.releaseLock();
+    await port.close();
+  });
+
+  it('does not crash when inbound data races readable cancel()', async () => {
+    const {serial, transport, device} = setup(new SilentDevice(FTDI));
+    const [port] = await serial.getPorts();
+    await port.open({baudRate: 9600});
+    const reader = port.readable!.getReader();
+
+    // Gate cancel()'s purgeHwBuffers so the stream is already closed but the
+    // native data subscription is still attached — the window in which a late
+    // data event would enqueue into an already-closed controller and throw.
+    let releasePurge: (() => void) | undefined;
+    jest.spyOn(transport, 'purgeHwBuffers').mockImplementationOnce(
+      () =>
+        new Promise<void>(resolve => {
+          releasePurge = resolve;
+        }),
+    );
+
+    const caught: unknown[] = [];
+    const capture = (e: unknown) => {
+      caught.push(e);
+    };
+    process.on('uncaughtException', capture);
+    process.on('unhandledRejection', capture);
+    try {
+      const cancelPromise = reader.cancel();
+      device.push([1, 2, 3]); // arrives while the stream is mid-cancel
+      await new Promise(resolve => setTimeout(resolve, 0));
+      releasePurge?.();
+      await cancelPromise;
+      await new Promise(resolve => setTimeout(resolve, 0));
+    } finally {
+      process.off('uncaughtException', capture);
+      process.off('unhandledRejection', capture);
+    }
+
+    expect(caught).toEqual([]);
+    await port.close();
+  });
+
+  it('re-acquires readable after cancel() and keeps receiving while open', async () => {
+    const {serial, device} = setup(new SilentDevice(FTDI));
+    const [port] = await serial.getPorts();
+    await port.open({baudRate: 9600});
+
+    const reader1 = port.readable!.getReader();
+    device.push([1, 1]);
+    expect(Array.from((await reader1.read()).value ?? [])).toEqual([1, 1]);
+    await reader1.cancel();
+    reader1.releaseLock();
+
+    // The port is still open, so a fresh readable must deliver later data
+    // (and the stale subscription must not double-enqueue or throw).
+    const readable2 = port.readable;
+    expect(readable2).not.toBeNull();
+    const reader2 = readable2!.getReader();
+    device.push([2, 2]);
+    expect(Array.from((await reader2.read()).value ?? [])).toEqual([2, 2]);
+    reader2.releaseLock();
+
+    await port.close();
+  });
 });
