@@ -2,6 +2,7 @@ import {
   EchoDevice,
   VirtualSerialTransport,
 } from 'react-native-web-serial-api/testing';
+import {NmeaGpsDevice} from './devices/gps/NmeaGpsDevice';
 import {SensorDevice} from './devices/SensorDevice';
 import {WMBusGateway} from './devices/wmbus/WMBusGateway';
 import {WMBusMeter} from './devices/wmbus/WMBusMeter';
@@ -15,9 +16,11 @@ import {WMBusMeter} from './devices/wmbus/WMBusMeter';
  * write for their own E2E tests):
  *  - an FTDI {@link EchoDevice} that echoes everything you type (already permitted),
  *  - a CP210x {@link SensorDevice} that streams readings + answers commands and
- *    starts un-permitted, so you can exercise the tap-to-grant flow too, and
+ *    starts un-permitted, so you can exercise the tap-to-grant flow too,
  *  - a CH340 {@link WMBusGateway} speaking the full IMST HCI protocol, hosting a
- *    virtual meter that streams WM-Bus telegrams (HCI 0x20 events).
+ *    virtual meter that streams WM-Bus telegrams (HCI 0x20 events), and
+ *  - a u-blox {@link NmeaGpsDevice} streaming NMEA 0183 sentences ($GPGGA,
+ *    $GPRMC, …) for the Greenwich Royal Observatory position.
  */
 export function createDemoTransport(): VirtualSerialTransport {
   // A little latency makes streaming feel like real hardware.
@@ -62,6 +65,9 @@ export function createDemoTransport(): VirtualSerialTransport {
     }),
   );
   transport.addDevice(gateway, {hasPermission: true});
+
+  // A GPS receiver streaming NMEA 0183 from the Greenwich Royal Observatory.
+  transport.addDevice(new NmeaGpsDevice(), {hasPermission: true});
 
   return transport;
 }

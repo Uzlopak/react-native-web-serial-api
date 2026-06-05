@@ -14,6 +14,11 @@ import {
 } from '../../../src/__tests__/conformance-suite';
 import {AppBar} from '../components/AppBar';
 import {
+  compareGpsWithSimulator,
+  makeVirtualGpsPort,
+  runGpsConformance,
+} from '../devices/gps/conformance';
+import {
   compareWithSimulator,
   makeVirtualGatewayPort,
   runWMBusConformance,
@@ -119,7 +124,11 @@ export function SelfTestScreen({serial, onBack}: Props) {
       <View style={styles.actions}>
         <TouchableOpacity
           testID="wmbus-virtual"
-          style={[styles.button, styles.buttonWmbus, running && styles.buttonDisabled]}
+          style={[
+            styles.button,
+            styles.buttonWmbus,
+            running && styles.buttonDisabled,
+          ]}
           disabled={running}
           onPress={() =>
             run('WM-Bus gateway suite (virtual)', async progress =>
@@ -130,7 +139,11 @@ export function SelfTestScreen({serial, onBack}: Props) {
         </TouchableOpacity>
         <TouchableOpacity
           testID="wmbus-compare"
-          style={[styles.button, styles.buttonWmbus, running && styles.buttonDisabled]}
+          style={[
+            styles.button,
+            styles.buttonWmbus,
+            running && styles.buttonDisabled,
+          ]}
           disabled={running}
           onPress={() =>
             run('WM-Bus device vs simulator', async progress => {
@@ -147,6 +160,51 @@ export function SelfTestScreen({serial, onBack}: Props) {
                 ];
               }
               return compareWithSimulator(connected, progress);
+            })
+          }>
+          <Text style={styles.buttonText}>Compare device ↔ sim</Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.actions}>
+        <TouchableOpacity
+          testID="gps-virtual"
+          style={[
+            styles.button,
+            styles.buttonGps,
+            running && styles.buttonDisabled,
+          ]}
+          disabled={running}
+          onPress={() =>
+            run('GPS NMEA suite (virtual)', async progress =>
+              runGpsConformance(await makeVirtualGpsPort(), progress),
+            )
+          }>
+          <Text style={styles.buttonText}>GPS suite (virtual)</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          testID="gps-compare"
+          style={[
+            styles.button,
+            styles.buttonGps,
+            running && styles.buttonDisabled,
+          ]}
+          disabled={running}
+          onPress={() =>
+            run('GPS receiver vs simulator', async progress => {
+              const [connected] = await serial.getPorts();
+              if (!connected) {
+                return [
+                  {
+                    name: 'a GPS receiver is connected',
+                    passed: false,
+                    error:
+                      'Connect an NMEA 0183 GPS receiver (e.g. a u-blox) and grant USB permission, then retry.',
+                    durationMs: 0,
+                  },
+                ];
+              }
+              return compareGpsWithSimulator(connected, progress);
             })
           }>
           <Text style={styles.buttonText}>Compare device ↔ sim</Text>
@@ -173,10 +231,14 @@ export function SelfTestScreen({serial, onBack}: Props) {
           no hardware required. “Run on connected device” exercises a small,
           safe subset against a real port (or the active demo device).{'\n\n'}
           “WM-Bus suite (virtual)” runs the IMST HCI gateway checks against the
-          built-in simulator. “Compare device ↔ sim” runs the same checks against
-          the connected gateway and the simulator and flags any case where the
-          real device behaves differently — turn demo mode off and connect a real
-          WM-Bus gateway first.
+          built-in simulator. “Compare device ↔ sim” runs the same checks
+          against the connected gateway and the simulator and flags any case
+          where the real device behaves differently — turn demo mode off and
+          connect a real WM-Bus gateway first.{'\n\n'}
+          “GPS suite (virtual)” validates the NMEA 0183 stream from the built-in
+          GPS emulator; “Compare device ↔ sim” runs the same checks against a
+          connected NMEA receiver (e.g. a u-blox 8) — connect one with a fix
+          first.
         </Text>
       )}
 
@@ -211,6 +273,7 @@ const styles = StyleSheet.create({
   },
   buttonAlt: {backgroundColor: colors.accent},
   buttonWmbus: {backgroundColor: '#6a1b9a'},
+  buttonGps: {backgroundColor: '#00695c'},
   buttonDisabled: {opacity: 0.5},
   buttonText: {color: colors.onPrimary, fontWeight: '600'},
   hint: {color: colors.textSecondary, paddingHorizontal: 16, paddingBottom: 8},

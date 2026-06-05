@@ -208,6 +208,46 @@ transport.addDevice(new EchoDevice(), {hasPermission: true});
 const serial = new Serial(transport); // no native module, no hardware
 ```
 
+### Writing a virtual serial device
+
+You author a peripheral by extending **`SerialDevice`** and overriding the lifecycle hooks (`onOpen`, `onData`, `onClose`); `this.send(...)` streams bytes back to the host. Registering it with `transport.addDevice()` hands you back a **`VirtualSerialDevice`** — the handle a test or demo uses to drive it, like a human plugging in cables.
+
+```ts
+import {SerialDevice} from 'react-native-web-serial-api/testing';
+
+// The peripheral's "firmware": greet on open, answer "ID?", stream readings.
+class Thermometer extends SerialDevice {
+  readonly usbVendorId = 0x10c4; // CP210x
+  readonly usbProductId = 0xea60;
+  #timer?: ReturnType<typeof setInterval>;
+
+  onOpen() {
+    this.send('READY\r\n');
+    this.#timer = setInterval(() => this.send(`temp=${20 + Math.random() * 5}\r\n`), 1000);
+  }
+  onData(bytes: Uint8Array) {
+    if (String.fromCharCode(...bytes).trim() === 'ID?') this.send('ACME-TEMP\r\n');
+  }
+  onClose() {
+    clearInterval(this.#timer);
+  }
+}
+```
+
+`SerialDevice` is what *you* write (the device behaviour); `VirtualSerialDevice` is the transport-side handle `addDevice` returns, so you can drive and inspect the device without putting any bytes on the wire:
+
+```ts
+const transport = new VirtualSerialTransport();
+const device = transport.addDevice(new Thermometer(), {hasPermission: true});
+
+device.push([0x48, 0x69]); // device emits bytes to the host, unprompted
+device.loseDevice();       // simulate an unplug (errors any open stream)
+device.attach();           // plug it back in (fires "connect" with a fresh id)
+device.written;            // frames the host has written to the device (for assertions)
+```
+
+For a fuller, **DRY** worked example see the example app's **NMEA 0183 GPS emulator** in [`example/src/devices/gps/`](example/src/devices/gps/): it streams `$GPGGA`/`$GPRMC`/… for a configurable position (default: the Greenwich Royal Observatory) and exposes an `update()` method to change position, satellites, and signal strength at runtime — no serial round-trip. It also ships a **conformance suite** ([`gps/conformance.ts`](example/src/devices/gps/conformance.ts)) of talker-agnostic NMEA 0183 checks that run against the emulator under Jest and against a real receiver (e.g. a u-blox) from the example app's **Self Test** screen.
+
 ```sh
 npm test               # unit + WPT conformance suites
 npm run test:coverage  # coverage report (HTML in coverage/lcov-report)
