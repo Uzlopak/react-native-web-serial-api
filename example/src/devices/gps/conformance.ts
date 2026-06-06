@@ -18,7 +18,7 @@ import {
   assert,
   compareResults,
   errorMessage,
-  SerialClient,
+  SerialTestHarness,
   type SerialTestProgress,
   type SerialTestResult,
   VirtualSerialTransport,
@@ -298,13 +298,13 @@ export const gpsConformanceTests: GpsConformanceTest[] = [
 // ── an NMEA line reader over a SerialPort ────────────────────────────────────
 
 /**
- * Read sentences off a {@link SerialClient} until `wantTypes` have all been seen
+ * Read sentences off a {@link SerialTestHarness} until `wantTypes` have all been seen
  * (a full cycle) or `timeoutMs` elapses — fast for the emulator, ~1–2 s for real
- * hardware. `SerialClient.readLine` does the line framing the collector used to
+ * hardware. `SerialTestHarness.readLine` does the line framing the collector used to
  * hand-roll.
  */
 async function collectSentences(
-  client: SerialClient,
+  client: SerialTestHarness,
   options: {wantTypes: string[]; minSentences: number; timeoutMs: number},
 ): Promise<NmeaSentence[]> {
   const out: NmeaSentence[] = [];
@@ -341,7 +341,7 @@ export async function runGpsConformance(
   port: SerialPort,
   progress?: GpsConformanceProgress,
 ): Promise<GpsTestResult[]> {
-  const client = new SerialClient(port);
+  const client = new SerialTestHarness(port);
   try {
     await client.open({baudRate: 9600});
   } catch (e) {
@@ -358,7 +358,7 @@ export async function runGpsConformance(
   const batch = await collectSentences(client, {
     wantTypes: ['GGA', 'RMC', 'GSV', 'GSA'],
     minSentences: 4,
-    timeoutMs: 5000,
+    timeoutMs: 2000,
   });
 
   const results: GpsTestResult[] = [];

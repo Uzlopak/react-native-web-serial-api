@@ -483,7 +483,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
         const evt = await c.waitFor(
           Sap.WMBus,
           WMBus.RxMessageInd,
-          15000,
+          4000,
           m => m.payload.length >= 9,
         );
         const r = new ByteReader(evt.payload);
@@ -605,7 +605,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
         const evt = await c.waitFor(
           Sap.WMBus,
           WMBus.ScanModeInd,
-          20000,
+          4000,
           m => m.payload.length >= 6,
         );
         const r = new ByteReader(evt.payload);
@@ -662,7 +662,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
         const tx = await c.waitFor(
           Sap.WMBus,
           WMBus.MessageTransmittedInd,
-          5000,
+          2500,
         );
         assertEqual(
           tx.payload[tx.payload.length - 1],
@@ -708,7 +708,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
         await c.waitFor(
           Sap.WMBus,
           WMBus.RxMessageInd,
-          15000,
+          4000,
           m => m.payload.length >= 9,
         );
 
@@ -722,7 +722,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
         );
 
         // Once listening is disabled there should be no new Rx telegram events.
-        await c.expectNoMessage(Sap.WMBus, WMBus.RxMessageInd, 10000);
+        await c.expectNoMessage(Sap.WMBus, WMBus.RxMessageInd, 2500);
       } finally {
         await c.exchange(
           Sap.WMBus,

@@ -1,7 +1,7 @@
 /**
  * A host-side HCI client for any IMST-style WM-Bus gateway over a
  * {@link SerialPort}. It frames requests (SLIP + HCI) and decodes the gateway's
- * responses and unsolicited events, layered on the shipped {@link SerialClient}
+ * responses and unsolicited events, layered on the shipped {@link SerialTestHarness}
  * — the library's reusable reader/writer/timeout plumbing — so no test re-rolls
  * a reader loop. Shared by the conformance suite and the gateway/meter tests.
  *
@@ -13,22 +13,22 @@
  */
 
 import type {SerialPort} from 'react-native-web-serial-api';
-import {SerialClient} from 'react-native-web-serial-api/testing';
+import {SerialTestHarness} from 'react-native-web-serial-api/testing';
 import {DevMgmt, decodeHci, encodeHci, type HciMessage, Sap} from './hci';
 import {SlipDecoder, slipEncode} from './slip';
 
 export class HciHost {
-  readonly #client: SerialClient;
+  readonly #client: SerialTestHarness;
   readonly #dec = new SlipDecoder();
   readonly #pending: HciMessage[] = [];
 
-  constructor(client: SerialClient) {
+  constructor(client: SerialTestHarness) {
     this.#client = client;
   }
 
   /** Open `port` and return a ready host. */
   static async open(port: SerialPort, baudRate = 115200): Promise<HciHost> {
-    const client = new SerialClient(port);
+    const client = new SerialTestHarness(port);
     await client.open({baudRate});
     return new HciHost(client);
   }
