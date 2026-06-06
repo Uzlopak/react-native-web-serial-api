@@ -81,6 +81,7 @@ class FakeSerial implements SerialLike {
 class FakeWs implements WsLike {
   readonly sent: Array<string | Uint8Array> = [];
   #onMessage?: (data: unknown, isBinary: boolean) => void;
+  readonly #listeners: Record<string, Array<(...a: never[]) => void>> = {};
 
   send(data: string | Uint8Array): void {
     this.sent.push(data);
@@ -88,6 +89,13 @@ class FakeWs implements WsLike {
   on(event: string, listener: (...a: never[]) => void): void {
     if (event === 'message') {
       this.#onMessage = listener as (data: unknown, isBinary: boolean) => void;
+    }
+    this.#listeners[event] ??= [];
+    this.#listeners[event].push(listener);
+  }
+  emit(event: string, ...args: unknown[]): void {
+    for (const l of this.#listeners[event] ?? []) {
+      (l as (...a: unknown[]) => void)(...args);
     }
   }
   recvBinary(bytes: number[]): void {
@@ -295,7 +303,6 @@ describe('attachBridge', () => {
     ws.recvRaw(buf, true);
     await flush();
 
-    // EchoDevice echos back — but here FakeSerial echoes synchronously on write
     expect(ws.binary()).toHaveLength(1);
     expect(Array.from(ws.binary()[0])).toEqual([0xde, 0xad, 0xbe]);
   });
@@ -322,6 +329,103 @@ describe('attachBridge', () => {
     await flush();
 
     expect(log).toHaveBeenCalledWith(expect.stringMatching(/write failed/));
+  });
+
+  it('logs ws error via options.log', () => {
+    const serial = new FakeSerial();
+    const ws = new FakeWs();
+    const log = jest.fn();
+    attachBridge(serial, ws, {log});
+
+    ws.emit('error', new Error('ws boom'));
+
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/ws error/));
+  });
+
+  it('stops forwarding serial data after the ws closes (teardown)', () => {
+    const serial = new FakeSerial();
+    const ws = new FakeWs();
+    attachBridge(serial, ws);
+
+    ws.emit('close'); // triggers teardown — serial listeners removed
+    serial.emit('data', Uint8Array.from([0xff])); // should not be forwarded
+    expect(ws.binary()).toHaveLength(0);
+  });
+
+  it('answers getPortInfo from a callback function', () => {
+    const serial = new FakeSerial();
+    const ws = new FakeWs();
+    attachBridge(serial, ws, {
+      portInfo: () => ({
+        usbVendorId: 0x1234,
+        usbProductId: 0x5678,
+        serialNumber: 'CALLBACK-SN',
+      }),
+    });
+
+    ws.recvCommand({type: 'command', id: 10, command: 'getPortInfo'});
+    const rsp = ws.responses().find(r => r.id === 10);
+    expect(rsp?.result).toEqual({
+      usbVendorId: 0x1234,
+      usbProductId: 0x5678,
+      serialNumber: 'CALLBACK-SN',
+    });
+  });
+
+  it('emits open event when serial port opens', () => {
+    const serial = new FakeSerial();
+    const ws = new FakeWs();
+    attachBridge(serial, ws);
+
+    serial.emit('open');
+
+    expect(ws.responses()).toContainEqual({
+      type: 'event',
+      event: 'open',
+    });
+  });
+
+  it('setSignals with brk sends break signal', async () => {
+    const serial = new FakeSerial();
+    const ws = new FakeWs();
+    attachBridge(serial, ws);
+
+    ws.recvCommand({
+      type: 'command',
+      id: 30,
+      command: 'setSignals',
+      args: {brk: true},
+    });
+    await flush();
+
+    expect(serial.brk).toBe(true);
+  });
+
+  it('sets readingByDefault to false when configured', () => {
+    const serial = new FakeSerial();
+    const ws = new FakeWs();
+    attachBridge(serial, ws, {readingByDefault: false});
+
+    serial.emit('data', Uint8Array.from([1, 2]));
+    expect(ws.binary()).toHaveLength(0);
+  });
+
+  it('setSignals with only a subset of flags sets only those', async () => {
+    const serial = new FakeSerial();
+    serial.dtr = true; // pre-set
+    const ws = new FakeWs();
+    attachBridge(serial, ws);
+
+    ws.recvCommand({
+      type: 'command',
+      id: 31,
+      command: 'setSignals',
+      args: {rts: true},
+    });
+    await flush();
+
+    expect(serial.rts).toBe(true);
+    expect(serial.dtr).toBe(true); // unchanged
   });
 });
 
@@ -369,5 +473,20 @@ describe('parseBridgeArgs', () => {
       wsPort: 7000,
       host: '192.168.1.5',
     });
+  });
+
+  it('parses --host flag', () => {
+    const a = parseBridgeArgs(['--port', '/dev/ttyUSB0', '--host', '10.0.2.2']);
+    expect(a.host).toBe('10.0.2.2');
+  });
+
+  it('parses -h help flag', () => {
+    const a = parseBridgeArgs(['-h']);
+    expect(a.help).toBe(true);
+  });
+
+  it('parses --help flag', () => {
+    const a = parseBridgeArgs(['--help']);
+    expect(a.help).toBe(true);
   });
 });
