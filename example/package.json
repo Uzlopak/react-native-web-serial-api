@@ -5,6 +5,7 @@
   "scripts": {
     "android": "react-native run-android",
     "start": "react-native start",
+    "typecheck": "tsc --noEmit",
     "build:android": "cd android && ./gradlew assembleDebug",
     "web": "vite",
     "web:build": "vite build",

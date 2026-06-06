@@ -16,12 +16,15 @@ import {
 /** A fake WebSocket the transport constructs; the test drives the far end. */
 class FakeWebSocket implements WebSocketLike {
   static instances: FakeWebSocket[] = [];
+  public url: string = '';
+
   binaryType = 'blob';
   readonly #listeners: Record<string, Array<(e: {data?: unknown}) => void>> =
     {};
   onSend?: (data: string | ArrayBufferLike | ArrayBufferView) => void;
 
-  constructor(public url: string) {
+  constructor(url: string) {
+    this.url = url;
     FakeWebSocket.instances.push(this);
   }
   addEventListener(

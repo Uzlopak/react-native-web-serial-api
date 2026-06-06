@@ -1,6 +1,7 @@
 {
   "extends": "@react-native/typescript-config",
   "compilerOptions": {
+    "erasableSyntaxOnly": true,
     "lib": ["ESNext", "DOM"],
     "paths": {
       "react-native-web-serial-api": ["../src/index"],

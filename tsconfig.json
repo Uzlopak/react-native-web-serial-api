@@ -8,6 +8,7 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "noFallthroughCasesInSwitch": true,
+    "erasableSyntaxOnly": true,
     "noImplicitReturns": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,

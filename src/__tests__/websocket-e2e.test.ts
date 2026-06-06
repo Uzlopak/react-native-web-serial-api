@@ -5,13 +5,14 @@
  * (app ⇄ ws ⇄ simulator) exercised without a device: the SAME `SerialClient`
  * code and `runSerialTests` suite that run in-memory also run over the socket.
  */
-import {afterEach, describe, expect, it} from '@jest/globals';
+
 import {createServer} from 'node:net';
+import {afterEach, describe, expect, it} from '@jest/globals';
 import {WebSocket, WebSocketServer} from 'ws';
 import {
   EchoDevice,
-  exposeSerialDevice,
   type ExposedSerialDevice,
+  exposeSerialDevice,
   runSerialTests,
   SerialClient,
   type SerialTest,
@@ -60,7 +61,10 @@ async function connect(exposedDevice: ExposedSerialDevice) {
 describe('exposeSerialDevice ⇄ WebSocketSerialTransport (real sockets)', () => {
   it('round-trips host writes and test-driven device pushes over the socket', async () => {
     const port = await freePort();
-    const ex = exposeSerialDevice(new EchoDevice(FTDI), {port, WebSocketServer});
+    const ex = exposeSerialDevice(new EchoDevice(FTDI), {
+      port,
+      WebSocketServer,
+    });
     const serialPort = await connect(ex);
 
     const client = new SerialClient(serialPort);
@@ -81,7 +85,10 @@ describe('exposeSerialDevice ⇄ WebSocketSerialTransport (real sockets)', () =>
 
   it('runs a runSerialTests suite unchanged over the WebSocket port', async () => {
     const port = await freePort();
-    const ex = exposeSerialDevice(new EchoDevice(FTDI), {port, WebSocketServer});
+    const ex = exposeSerialDevice(new EchoDevice(FTDI), {
+      port,
+      WebSocketServer,
+    });
     const serialPort = await connect(ex);
 
     const suite: SerialTest[] = [
