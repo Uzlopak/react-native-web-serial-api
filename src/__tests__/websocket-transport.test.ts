@@ -79,7 +79,7 @@ function mount(
       usbVendorId?: number;
       usbProductId?: number;
       serialNumber?: string;
-    };
+    } | null;
   } = {},
 ) {
   FakeWebSocket.instances = [];
@@ -969,6 +969,649 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
     // Second disconnect should not throw
     transport.disconnect();
     expect(transport.connectionState).toBe('closed');
+  });
+
+  it('waiter times out waiting for connection', async () => {
+    FakeWebSocket.instances = [];
+    const transport = new WebSocketSerialTransport('ws://test', {
+      WebSocket: FakeWebSocket as unknown as WebSocketCtor,
+      reconnect: false,
+      connectTimeoutMs: 50,
+    });
+    await expect(transport.open(1, 0, {baudRate: 115200})).rejects.toThrow(
+      'Timed out waiting for the WebSocket connection.',
+    );
+  }, 5000);
+
+  it('#failAll rejects pending commands when socket closes', async () => {
+    FakeWebSocket.instances = [];
+    const transport = new WebSocketSerialTransport('ws://test', {
+      WebSocket: FakeWebSocket as unknown as WebSocketCtor,
+      commandTimeoutMs: 5000,
+      reconnect: false,
+    });
+    const ws = FakeWebSocket.instances[0];
+    autoAnswer(ws);
+    ws.fireOpen();
+    await tick();
+
+    ws.onSend = () => {}; // stop answering after initial handshake
+    const promise = transport.setDTR(1, 0, true);
+    await tick();
+    ws.fireClose();
+    await expect(promise).rejects.toThrow('WebSocket connection lost');
+  });
+
+  it('close() is idempotent when already suspended or closed', async () => {
+    FakeWebSocket.instances = [];
+    const transport = new WebSocketSerialTransport('ws://test', {
+      WebSocket: FakeWebSocket as unknown as WebSocketCtor,
+      reconnect: false,
+    });
+    const ws = FakeWebSocket.instances[0];
+    autoAnswer(ws);
+    ws.fireOpen();
+    await tick();
+
+    await transport.open(1, 0, {baudRate: 115200});
+    await transport.close(1, 0);
+    expect(transport.connectionState).toBe('suspended');
+
+    await expect(transport.close(1, 0)).resolves.toBeUndefined();
+    expect(transport.connectionState).toBe('suspended');
+
+    transport.disconnect();
+    await expect(transport.close(1, 0)).resolves.toBeUndefined();
+  });
+
+  it('onReconnecting callback fires with attempt count', async () => {
+    const onReconnecting = jest.fn();
+    FakeWebSocket.instances = [];
+    const transport = new WebSocketSerialTransport('ws://test', {
+      WebSocket: FakeWebSocket as unknown as WebSocketCtor,
+      reconnectInitialDelayMs: 0,
+      onReconnecting,
+    });
+    const ws = FakeWebSocket.instances[0];
+    autoAnswer(ws);
+    ws.fireOpen();
+    await tick();
+
+    ws.fireClose();
+    await tick();
+
+    expect(onReconnecting).toHaveBeenCalledWith(1, expect.any(Number));
+    expect(transport.connectionState).toBe('reconnecting');
+    transport.disconnect();
+  });
+
+  it('onConnected fires with reconnected=false on first connect and reconnected=true after', async () => {
+    const onConnected = jest.fn();
+    FakeWebSocket.instances = [];
+    const transport = new WebSocketSerialTransport('ws://test', {
+      WebSocket: FakeWebSocket as unknown as WebSocketCtor,
+      reconnectInitialDelayMs: 0,
+      onConnected,
+    });
+    const ws = FakeWebSocket.instances[0];
+    autoAnswer(ws);
+    ws.fireOpen();
+    await tick();
+
+    expect(onConnected).toHaveBeenCalledWith({reconnected: false});
+    expect(transport.connectionState).toBe('open');
+
+    ws.fireClose();
+    await tick();
+    const ws2 = FakeWebSocket.instances[1];
+    autoAnswer(ws2);
+    ws2.fireOpen();
+    await tick();
+
+    expect(onConnected).toHaveBeenCalledWith({reconnected: true});
+    transport.disconnect();
+  });
+
+  it('onClosed fires with "closed by client" reason when manually disconnected', async () => {
+    const onClosed = jest.fn();
+    FakeWebSocket.instances = [];
+    const transport = new WebSocketSerialTransport('ws://test', {
+      WebSocket: FakeWebSocket as unknown as WebSocketCtor,
+      reconnect: false,
+      onClosed,
+    });
+    const ws = FakeWebSocket.instances[0];
+    autoAnswer(ws);
+    ws.fireOpen();
+    await tick();
+
+    transport.disconnect();
+    expect(onClosed).toHaveBeenCalledWith('closed by client');
+  });
+
+  it('onClosed fires when reconnect budget is exhausted', async () => {
+    const onClosed = jest.fn();
+    FakeWebSocket.instances = [];
+    const transport = new WebSocketSerialTransport('ws://test', {
+      WebSocket: FakeWebSocket as unknown as WebSocketCtor,
+      reconnectInitialDelayMs: 0,
+      maxReconnectAttempts: 1,
+      onClosed,
+    });
+    const ws = FakeWebSocket.instances[0];
+    autoAnswer(ws);
+    ws.fireOpen();
+    await tick();
+
+    ws.fireClose();
+    await tick();
+    const ws2 = FakeWebSocket.instances[1];
+    ws2.fireClose();
+
+    expect(onClosed).toHaveBeenCalledWith(
+      'WebSocket connection lost and will not be retried.',
+    );
+    expect(transport.connectionState).toBe('closed');
+  });
+
+  it('WebSocket constructor throwing on reconnect leaves transport in reconnecting state', async () => {
+    let shouldThrow = false;
+    class ThrowingCtor extends FakeWebSocket {
+      constructor(url: string) {
+        super(url);
+        if (shouldThrow) throw new Error('connection refused');
+      }
+    }
+
+    FakeWebSocket.instances = [];
+    const transport = new WebSocketSerialTransport('ws://test', {
+      WebSocket: ThrowingCtor as unknown as WebSocketCtor,
+      reconnectInitialDelayMs: 0,
+    });
+    const ws = FakeWebSocket.instances[0] as ThrowingCtor;
+    autoAnswer(ws);
+    ws.fireOpen();
+    await tick();
+
+    shouldThrow = true;
+    ws.fireClose();
+    await tick();
+
+    expect(transport.connectionState).toBe('reconnecting');
+    transport.disconnect();
+  });
+
+  it('error event with no error field uses "serial error" fallback', () => {
+    const {transport, ws} = mount();
+    const onError = jest.fn();
+    transport.onError(onError);
+    ws.deliverText(
+      JSON.stringify({type: 'event', event: 'error', error: undefined}),
+    );
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({error: 'serial error'}),
+    );
+  });
+
+  it('setDTR sends setSignals with only dtr', async () => {
+    const {transport, commands} = mount();
+    await transport.setDTR(1, 0, true);
+    expect(commands.find(c => c.command === 'setSignals')?.args).toMatchObject({
+      dtr: true,
+    });
+  });
+
+  it('setRTS sends setSignals with only rts', async () => {
+    const {transport, commands} = mount();
+    await transport.setRTS(1, 0, true);
+    expect(commands.find(c => c.command === 'setSignals')?.args).toMatchObject({
+      rts: true,
+    });
+  });
+
+  it('setBreak(false) sends setSignals with brk false', async () => {
+    const {transport, commands} = mount();
+    await transport.setBreak(1, 0, false);
+    expect(commands.find(c => c.command === 'setSignals')?.args).toMatchObject({
+      brk: false,
+    });
+  });
+
+  it('purgeHwBuffers sends flush for (true,false), (false,true), and (false,false)', async () => {
+    const {transport, commands} = mount();
+    await transport.purgeHwBuffers(1, 0, true, false);
+    expect(commands.find(c => c.command === 'flush')).toBeTruthy();
+
+    commands.length = 0;
+    await transport.purgeHwBuffers(1, 0, false, true);
+    expect(commands.find(c => c.command === 'flush')).toBeTruthy();
+
+    commands.length = 0;
+    await transport.purgeHwBuffers(1, 0, false, false);
+    expect(commands.find(c => c.command === 'flush')).toBeTruthy();
+  });
+
+  it('getSerial returns empty string when serialNumber is empty', async () => {
+    const {transport} = mount({portInfo: {serialNumber: ''}});
+    await transport.findAllDrivers();
+    await expect(transport.getSerial(1, 0)).resolves.toBe('');
+  });
+
+  it('getSerial returns empty string when portInfo is null', async () => {
+    const {transport} = mount({portInfo: null});
+    await transport.findAllDrivers();
+    await expect(transport.getSerial(1, 0)).resolves.toBe('');
+  });
+
+  it('parity mapping: 0=none, 1=odd, 2=even, 3=none (fallback), 4=none (fallback)', async () => {
+    const {transport, commands} = mount();
+
+    await transport.open(1, 0, {baudRate: 9600, parity: 0});
+    expect(
+      commands.find(c => c.command === 'setLineCoding')?.args,
+    ).toMatchObject({
+      parity: 'none',
+    });
+
+    commands.length = 0;
+    await transport.setParameters(1, 0, {baudRate: 9600, parity: 1});
+    expect(
+      commands.find(c => c.command === 'setLineCoding')?.args,
+    ).toMatchObject({
+      parity: 'odd',
+    });
+
+    commands.length = 0;
+    await transport.setParameters(1, 0, {baudRate: 9600, parity: 2});
+    expect(
+      commands.find(c => c.command === 'setLineCoding')?.args,
+    ).toMatchObject({
+      parity: 'even',
+    });
+
+    commands.length = 0;
+    await transport.setParameters(1, 0, {baudRate: 9600, parity: 3});
+    expect(
+      commands.find(c => c.command === 'setLineCoding')?.args,
+    ).toMatchObject({
+      parity: 'none',
+    });
+
+    commands.length = 0;
+    await transport.setParameters(1, 0, {baudRate: 9600, parity: 4});
+    expect(
+      commands.find(c => c.command === 'setLineCoding')?.args,
+    ).toMatchObject({
+      parity: 'none',
+    });
+  });
+
+  it('multiple onData listeners: removing one stops it receiving data', () => {
+    const {transport, ws} = mount();
+    const listener1 = jest.fn();
+    const listener2 = jest.fn();
+    const sub1 = transport.onData(listener1);
+    transport.onData(listener2);
+
+    ws.deliverBinary([1, 2, 3]);
+    expect(listener1).toHaveBeenCalledTimes(1);
+    expect(listener2).toHaveBeenCalledTimes(1);
+
+    sub1.remove();
+    ws.deliverBinary([4, 5, 6]);
+    expect(listener1).toHaveBeenCalledTimes(1);
+    expect(listener2).toHaveBeenCalledTimes(2);
+  });
+
+  it('multiple onError listeners: removing one stops it receiving errors', () => {
+    const {transport, ws} = mount();
+    const listener1 = jest.fn();
+    const listener2 = jest.fn();
+    const sub1 = transport.onError(listener1);
+    transport.onError(listener2);
+
+    ws.deliverText(
+      JSON.stringify({type: 'event', event: 'error', error: 'err1'}),
+    );
+    expect(listener1).toHaveBeenCalledTimes(1);
+    expect(listener2).toHaveBeenCalledTimes(1);
+
+    sub1.remove();
+    ws.deliverText(
+      JSON.stringify({type: 'event', event: 'error', error: 'err2'}),
+    );
+    expect(listener1).toHaveBeenCalledTimes(1);
+    expect(listener2).toHaveBeenCalledTimes(2);
+  });
+
+  it('onConnect listeners: both called on initial connection, removed one skipped', async () => {
+    FakeWebSocket.instances = [];
+    const transport = new WebSocketSerialTransport('ws://test', {
+      WebSocket: FakeWebSocket as unknown as WebSocketCtor,
+    });
+    const ws = FakeWebSocket.instances[0];
+    autoAnswer(ws);
+
+    const listener1 = jest.fn();
+    const listener2 = jest.fn();
+    const sub1 = transport.onConnect(listener1);
+    transport.onConnect(listener2);
+
+    // Remove one before the initial connection fires
+    sub1.remove();
+
+    ws.fireOpen();
+    await tick();
+
+    expect(listener1).not.toHaveBeenCalled(); // removed before first connect
+    expect(listener2).toHaveBeenCalledTimes(1);
+    transport.disconnect();
+  });
+
+  it('multiple onDisconnect listeners are both called on terminal disconnect', async () => {
+    FakeWebSocket.instances = [];
+    const transport = new WebSocketSerialTransport('ws://test', {
+      WebSocket: FakeWebSocket as unknown as WebSocketCtor,
+      reconnect: false,
+    });
+    const ws = FakeWebSocket.instances[0];
+    autoAnswer(ws);
+    ws.fireOpen();
+    await tick();
+
+    const listener1 = jest.fn();
+    const listener2 = jest.fn();
+    transport.onDisconnect(listener1);
+    transport.onDisconnect(listener2);
+
+    ws.fireClose();
+    expect(listener1).toHaveBeenCalledTimes(1);
+    expect(listener2).toHaveBeenCalledTimes(1);
+  });
+
+  it('subscription.remove() is idempotent', () => {
+    const {transport} = mount();
+    const sub = transport.onData(jest.fn());
+    sub.remove();
+    expect(() => sub.remove()).not.toThrow();
+    expect(() => sub.remove()).not.toThrow();
+  });
+
+  it('write() with an empty data array sends an empty binary frame', async () => {
+    const {transport, binary} = mount();
+    await transport.write(1, 0, []);
+    expect(binary).toHaveLength(1);
+    expect(Array.from(binary[0])).toEqual([]);
+  });
+
+  it('write() with a large data array sends all bytes', async () => {
+    const {transport, binary} = mount();
+    const large = Array.from({length: 10000}, (_, i) => i % 256);
+    await transport.write(1, 0, large);
+    expect(Array.from(binary[0])).toEqual(large);
+  });
+
+  it('startReading and stopReading can each be called multiple times', async () => {
+    const {transport, commands} = mount();
+    await transport.startReading(1, 0);
+    await transport.startReading(1, 0);
+    expect(commands.filter(c => c.command === 'startReading')).toHaveLength(2);
+
+    commands.length = 0;
+    await transport.stopReading(1, 0);
+    await transport.stopReading(1, 0);
+    expect(commands.filter(c => c.command === 'stopReading')).toHaveLength(2);
+  });
+
+  it('setParameters works when the port has not been opened', async () => {
+    const {transport, commands} = mount();
+    await transport.setParameters(1, 0, {baudRate: 9600});
+    expect(
+      commands.find(c => c.command === 'setLineCoding')?.args,
+    ).toMatchObject({
+      baudRate: 9600,
+    });
+  });
+
+  it('getControlLines returns empty list when all signals are inactive', async () => {
+    const {transport} = mount({
+      signals: {cts: false, dsr: false, dcd: false, ri: false},
+    });
+    expect(await transport.getControlLines(1, 0)).toEqual([]);
+  });
+
+  it('getControlLines returns only local signals (DTR, RTS) when set', async () => {
+    const {transport} = mount({
+      signals: {cts: false, dsr: false, dcd: false, ri: false},
+    });
+    await transport.setDTR(1, 0, true);
+    await transport.setRTS(1, 0, true);
+    const lines = await transport.getControlLines(1, 0);
+    expect(lines).toEqual(expect.arrayContaining(['DTR', 'RTS']));
+    expect(lines).not.toContain('CTS');
+  });
+
+  it('getControlLines returns only remote signals when CTS/DSR/CD/RI are active', async () => {
+    const {transport} = mount({
+      signals: {cts: true, dsr: true, dcd: true, ri: true},
+    });
+    const lines = await transport.getControlLines(1, 0);
+    expect(lines).toEqual(expect.arrayContaining(['CTS', 'DSR', 'CD', 'RI']));
+    expect(lines).not.toContain('DTR');
+    expect(lines).not.toContain('RTS');
+  });
+
+  it('showPortPicker with a vendor/product filter returns the single port', async () => {
+    const {transport} = mount();
+    const port = await transport.showPortPicker([
+      {usbVendorId: 0x0403},
+      {usbProductId: 0x6001},
+    ]);
+    expect(port).toMatchObject({
+      deviceId: 1,
+      portNumber: 0,
+      hasPermission: true,
+    });
+  });
+
+  it('findAllDrivers returns port with default IDs when portInfo is null', async () => {
+    const {transport} = mount({portInfo: null});
+    const ports = await transport.findAllDrivers();
+    expect(ports).toHaveLength(1);
+    expect(ports[0].usbVendorId).toBe(0);
+    expect(ports[0].usbProductId).toBe(0);
+  });
+
+  it('findAllDrivers fills missing portInfo fields with defaults', async () => {
+    const {transport} = mount({portInfo: {usbVendorId: 0x1234}});
+    const ports = await transport.findAllDrivers();
+    expect(ports[0].usbVendorId).toBe(0x1234);
+    expect(ports[0].usbProductId).toBe(0);
+  });
+
+  it('findAllDrivers handles non-object portInfo response gracefully', async () => {
+    FakeWebSocket.instances = [];
+    const transport = new WebSocketSerialTransport('ws://test', {
+      WebSocket: FakeWebSocket as unknown as WebSocketCtor,
+      reconnect: false,
+    });
+    const ws = FakeWebSocket.instances[0];
+    ws.onSend = d => {
+      if (typeof d !== 'string') return;
+      const m = JSON.parse(d) as {type: string; command: string; id: number};
+      if (m.command === 'getSignals') {
+        ws.deliverText(
+          JSON.stringify({
+            type: 'response',
+            id: m.id,
+            error: null,
+            result: {cts: false, dsr: false, dcd: false, ri: false},
+          }),
+        );
+      }
+      if (m.command === 'getPortInfo') {
+        ws.deliverText(
+          JSON.stringify({
+            type: 'response',
+            id: m.id,
+            error: null,
+            result: 'not an object',
+          }),
+        );
+      }
+    };
+    ws.fireOpen();
+    await tick();
+
+    const ports = await transport.findAllDrivers();
+    expect(ports).toHaveLength(1);
+    expect(ports[0].usbVendorId).toBe(0);
+    expect(ports[0].usbProductId).toBe(0);
+  });
+
+  it('findAllDrivers returns a port with defaults when getPortInfo times out', async () => {
+    FakeWebSocket.instances = [];
+    const transport = new WebSocketSerialTransport('ws://test', {
+      WebSocket: FakeWebSocket as unknown as WebSocketCtor,
+      reconnect: false,
+      commandTimeoutMs: 50,
+    });
+    const ws = FakeWebSocket.instances[0];
+    ws.onSend = d => {
+      if (typeof d !== 'string') return;
+      const m = JSON.parse(d) as {type: string; command: string; id: number};
+      if (m.command === 'getSignals') {
+        ws.deliverText(
+          JSON.stringify({
+            type: 'response',
+            id: m.id,
+            error: null,
+            result: {cts: false, dsr: false, dcd: false, ri: false},
+          }),
+        );
+      }
+      // getPortInfo: intentionally not answered → times out after 50 ms
+    };
+    ws.fireOpen();
+    await tick();
+
+    const ports = await transport.findAllDrivers();
+    expect(ports).toHaveLength(1);
+    expect(ports[0]).toMatchObject({
+      deviceId: 1,
+      portNumber: 0,
+      hasPermission: true,
+    });
+  }, 5000);
+
+  it('isOpen returns false after the port is closed', async () => {
+    const {transport} = mount();
+    await transport.open(1, 0, {baudRate: 115200});
+    expect(transport.isOpen(1, 0)).toBe(true);
+    await transport.close(1, 0);
+    expect(transport.isOpen(1, 0)).toBe(false);
+  });
+
+  it('command times out and rejects with a descriptive message', async () => {
+    FakeWebSocket.instances = [];
+    const transport = new WebSocketSerialTransport('ws://test', {
+      WebSocket: FakeWebSocket as unknown as WebSocketCtor,
+      commandTimeoutMs: 50,
+      reconnect: false,
+    });
+    const ws = FakeWebSocket.instances[0];
+    autoAnswer(ws);
+    ws.fireOpen();
+    await tick();
+
+    ws.onSend = () => {}; // stop answering
+    await expect(transport.setDTR(1, 0, true)).rejects.toThrow(
+      'Command "setSignals" timed out.',
+    );
+  }, 5000);
+
+  it('unknown bridge event type is silently ignored', () => {
+    const {transport, ws} = mount();
+    const onError = jest.fn();
+    transport.onError(onError);
+    ws.deliverText(JSON.stringify({type: 'event', event: 'unknown'}));
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('open event from bridge does not trigger onConnect', () => {
+    const {transport, ws} = mount();
+    const onConnect = jest.fn();
+    transport.onConnect(onConnect);
+    ws.deliverText(JSON.stringify({type: 'event', event: 'open'}));
+    expect(onConnect).not.toHaveBeenCalled();
+  });
+
+  it('getSignals returning null causes all signal getters to return false', async () => {
+    FakeWebSocket.instances = [];
+    const transport = new WebSocketSerialTransport('ws://test', {
+      WebSocket: FakeWebSocket as unknown as WebSocketCtor,
+      reconnect: false,
+    });
+    const ws = FakeWebSocket.instances[0];
+    ws.onSend = d => {
+      if (typeof d !== 'string') return;
+      const m = JSON.parse(d) as {type: string; command: string; id: number};
+      if (m.command === 'getSignals') {
+        ws.deliverText(
+          JSON.stringify({
+            type: 'response',
+            id: m.id,
+            error: null,
+            result: null,
+          }),
+        );
+      }
+    };
+    ws.fireOpen();
+    await tick();
+
+    expect(await transport.getCTS(1, 0)).toBe(false);
+    expect(await transport.getDSR(1, 0)).toBe(false);
+    expect(await transport.getCD(1, 0)).toBe(false);
+    expect(await transport.getRI(1, 0)).toBe(false);
+  });
+
+  it('getSignals returning partial signals defaults missing ones to false', async () => {
+    FakeWebSocket.instances = [];
+    const transport = new WebSocketSerialTransport('ws://test', {
+      WebSocket: FakeWebSocket as unknown as WebSocketCtor,
+      reconnect: false,
+    });
+    const ws = FakeWebSocket.instances[0];
+    ws.onSend = d => {
+      if (typeof d !== 'string') return;
+      const m = JSON.parse(d) as {type: string; command: string; id: number};
+      if (m.command === 'getSignals') {
+        ws.deliverText(
+          JSON.stringify({
+            type: 'response',
+            id: m.id,
+            error: null,
+            result: {cts: true},
+          }),
+        );
+      }
+    };
+    ws.fireOpen();
+    await tick();
+
+    expect(await transport.getCTS(1, 0)).toBe(true);
+    expect(await transport.getDSR(1, 0)).toBe(false);
+    expect(await transport.getCD(1, 0)).toBe(false);
+    expect(await transport.getRI(1, 0)).toBe(false);
+  });
+
+  it('setDTR false / getDTR round-trip', async () => {
+    const {transport} = mount();
+    await transport.setDTR(1, 0, true);
+    expect(await transport.getDTR(1, 0)).toBe(true);
+    await transport.setDTR(1, 0, false);
+    expect(await transport.getDTR(1, 0)).toBe(false);
   });
 });
 
