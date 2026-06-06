@@ -103,6 +103,7 @@
     "@react-native/babel-preset": "0.85.3",
     "@react-native/jest-preset": "0.85.3",
     "@types/jest": "^29.5.14",
+    "@types/node": "^25.9.2",
     "@types/react": "^19.2.6",
     "@types/ws": "^8.18.1",
     "babel-jest": "29.6.3",

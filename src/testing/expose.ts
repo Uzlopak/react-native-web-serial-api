@@ -85,8 +85,11 @@ export type ExposedSerialDevice<D extends SerialDevice = SerialDevice> = {
 function loadWebSocketServer(): WebSocketServerCtor {
   const specifier = 'ws';
   const nodeRequire =
+    // @ts-ignore
     typeof module !== 'undefined' &&
+    // @ts-ignore
     typeof (module as {require?: unknown}).require === 'function'
+    // @ts-ignore
       ? (module as {require: (id: string) => unknown}).require.bind(module)
       : undefined;
   if (!nodeRequire) {
