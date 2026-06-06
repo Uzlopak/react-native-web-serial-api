@@ -1,14 +1,14 @@
 /**
- * Tests for the SerialDevice authoring model: a class you extend to simulate a
+ * Tests for the SimulatedDevice authoring model: a class you extend to simulate a
  * whole peripheral. Driven through the real Serial/SerialPort polyfill.
  */
 import {describe, expect, it} from '@jest/globals';
 import {
-  EchoDevice,
-  LineDevice,
+  InMemorySerialTransport,
+  LineBufferedDevice,
+  LoopbackDevice,
   readBytes,
-  SerialDevice,
-  VirtualSerialTransport,
+  SimulatedDevice,
 } from '../testing';
 import {Serial} from '../WebSerial';
 
@@ -16,8 +16,8 @@ const enc = (s: string): Uint8Array => Uint8Array.from(s, c => c.charCodeAt(0));
 const dec = (b: ArrayLike<number>): string =>
   String.fromCharCode(...Array.from(b));
 
-async function mount(device: SerialDevice) {
-  const transport = new VirtualSerialTransport();
+async function mount(device: SimulatedDevice) {
+  const transport = new InMemorySerialTransport();
   transport.addDevice(device, {hasPermission: true});
   const serial = new Serial(transport);
   const [port] = await serial.getPorts();
@@ -25,9 +25,9 @@ async function mount(device: SerialDevice) {
   return {transport, serial, port};
 }
 
-describe('SerialDevice', () => {
+describe('SimulatedDevice', () => {
   it('returns fallback values from protected getters before binding', () => {
-    class Probe extends SerialDevice {
+    class Probe extends SimulatedDevice {
       readonly usbVendorId = 1;
       readonly usbProductId = 2;
       inspect() {
@@ -47,8 +47,8 @@ describe('SerialDevice', () => {
     });
   });
 
-  it('EchoDevice round-trips bytes', async () => {
-    const {port} = await mount(new EchoDevice());
+  it('LoopbackDevice round-trips bytes', async () => {
+    const {port} = await mount(new LoopbackDevice());
     await port.open({baudRate: 115200});
     const reader = port.readable!.getReader();
     const writer = port.writable!.getWriter();
@@ -59,8 +59,8 @@ describe('SerialDevice', () => {
     await port.close();
   });
 
-  it('addDevice(SerialDevice) enumerates with the device identity', async () => {
-    class MyDevice extends SerialDevice {
+  it('addDevice(SimulatedDevice) enumerates with the device identity', async () => {
+    class MyDevice extends SimulatedDevice {
       readonly usbVendorId = 0x1234;
       readonly usbProductId = 0x5678;
       readonly serialNumber = 'SN-1';
@@ -72,7 +72,7 @@ describe('SerialDevice', () => {
   it('fires onOpen (with options) and onClose', async () => {
     const events: string[] = [];
     let seen: {baudRate: number; dataBits: number} | undefined;
-    class D extends SerialDevice {
+    class D extends SimulatedDevice {
       readonly usbVendorId = 1;
       readonly usbProductId = 1;
       onOpen(options: {baudRate: number; dataBits: number}) {
@@ -92,7 +92,7 @@ describe('SerialDevice', () => {
   });
 
   it('models a line-based command/response device (string payloads)', async () => {
-    class Modem extends LineDevice {
+    class Modem extends LineBufferedDevice {
       readonly usbVendorId = 0x2341;
       readonly usbProductId = 0x0043;
       onLine(line: string) {
@@ -116,7 +116,7 @@ describe('SerialDevice', () => {
   });
 
   it('lets the device assert input signals the host can read', async () => {
-    class Gps extends SerialDevice {
+    class Gps extends SimulatedDevice {
       readonly usbVendorId = 0x067b;
       readonly usbProductId = 0x2303;
       onOpen() {
@@ -134,7 +134,7 @@ describe('SerialDevice', () => {
 
   it('delivers host control-signal changes to the device', async () => {
     const seen: Array<{rts: boolean; dtr: boolean}> = [];
-    class D extends SerialDevice {
+    class D extends SimulatedDevice {
       readonly usbVendorId = 1;
       readonly usbProductId = 1;
       onHostSignals(s: {requestToSend: boolean; dataTerminalReady: boolean}) {
@@ -151,7 +151,7 @@ describe('SerialDevice', () => {
   });
 
   it('surfaces a device-raised typed error on the readable', async () => {
-    class Flaky extends SerialDevice {
+    class Flaky extends SimulatedDevice {
       readonly usbVendorId = 1;
       readonly usbProductId = 1;
       onData() {

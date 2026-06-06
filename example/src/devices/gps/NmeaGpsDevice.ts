@@ -1,4 +1,4 @@
-import {SerialDevice} from 'react-native-web-serial-api/testing';
+import {SimulatedDevice} from 'react-native-web-serial-api/testing';
 import {
   buildCycle,
   DEFAULT_FIX,
@@ -27,7 +27,7 @@ export type NmeaGpsOptions = Partial<GpsFix> & {
 
 /**
  * A simulated NMEA 0183 GPS receiver — a worked example of authoring a whole
- * peripheral by extending `SerialDevice`. It is transmit-only (like a GPS
+ * peripheral by extending `SimulatedDevice`. It is transmit-only (like a GPS
  * puck): on open it streams a full sentence cycle immediately and then once per
  * `intervalMs`. It defaults to the Greenwich Royal Observatory position.
  *
@@ -40,7 +40,7 @@ export type NmeaGpsOptions = Partial<GpsFix> & {
  * // later, move it / change signal strength without touching the serial line:
  * gps.update({satellites: makeSatellites(12, {snrDb: 48})});
  */
-export class NmeaGpsDevice extends SerialDevice {
+export class NmeaGpsDevice extends SimulatedDevice {
   readonly usbVendorId: number;
   readonly usbProductId: number;
   readonly serialNumber: string;

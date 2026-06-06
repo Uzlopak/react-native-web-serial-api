@@ -1,5 +1,5 @@
 /**
- * Unit tests for the pure NMEA 0183 core (no SerialDevice, no transport).
+ * Unit tests for the pure NMEA 0183 core (no SimulatedDevice, no transport).
  * Greenwich Royal Observatory: lat 51.476852, lon -0.000500.
  */
 import {describe, expect, it} from '@jest/globals';

@@ -35,7 +35,7 @@ function App(): React.JSX.Element {
   const [demoMode, setDemoMode] = React.useState(false);
   const [remoteUrl, setRemoteUrl] = React.useState<string | null>(null);
 
-  // In demo mode the whole app talks to an in-memory VirtualSerialTransport via
+  // In demo mode the whole app talks to an in-memory InMemorySerialTransport via
   // a dedicated Serial instance — no USB hardware required. A fresh transport is
   // built whenever demo mode is (re)enabled.
   const demo = React.useMemo(() => {

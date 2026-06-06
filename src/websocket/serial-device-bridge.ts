@@ -1,5 +1,5 @@
 /**
- * Adapt an in-memory {@link VirtualSerialDevice} simulator to the
+ * Adapt an in-memory {@link DeviceHandle} simulator to the
  * `serialport`-style {@link SerialLike} that {@link attachBridge} consumes, so a
  * test can expose a *simulated* device over a WebSocket and have a real app
  * connect to it with `new WebSocketSerialTransport(url)`. This is what makes the
@@ -8,7 +8,7 @@
  *
  * Pure — no `ws`/`serialport`/Node imports — so it unit-tests with the same
  * `FakeWs` + `attachBridge` fakes the bridge core uses. The lazy-`ws` server
- * wrapper lives in `react-native-web-serial-api/testing` (`exposeSerialDevice`).
+ * wrapper lives in `react-native-web-serial-api/testing` (`exposeSimulatedDevice`).
  *
  * Mapping (host app ⇄ simulator):
  *   - client binary frame → `write` → `device.onData`,
@@ -20,15 +20,15 @@
  */
 
 import type {
-  VirtualSerialDevice,
-  VirtualSerialTransport,
-} from '../testing/virtual-serial-device';
+  DeviceHandle,
+  InMemorySerialTransport,
+} from '../testing/in-memory-serial-transport';
 import type {DataEvent, ErrorEvent} from '../transport';
 import type {SerialLike} from './bridge';
 import type {PortInfo} from './protocol';
 
 /** The bridge's `getPortInfo` metadata, taken from the device's USB identity. */
-export function portInfoFromDevice(device: VirtualSerialDevice): PortInfo {
+export function portInfoFromDevice(device: DeviceHandle): PortInfo {
   return {
     usbVendorId: device.usbVendorId,
     usbProductId: device.usbProductId,
@@ -41,9 +41,9 @@ export function portInfoFromDevice(device: VirtualSerialDevice): PortInfo {
  * `transport` via `addDevice`). One adapter per WebSocket connection; its
  * transport subscriptions are released when the bridge tears down its listeners.
  */
-export function serialDeviceToSerialLike(
-  transport: VirtualSerialTransport,
-  device: VirtualSerialDevice,
+export function SimulatedDeviceToSerialLike(
+  transport: InMemorySerialTransport,
+  device: DeviceHandle,
 ): SerialLike {
   const dataListeners = new Set<(data: Uint8Array) => void>();
   const errorListeners = new Set<(err: Error) => void>();

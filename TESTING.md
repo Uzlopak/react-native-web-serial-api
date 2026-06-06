@@ -9,11 +9,11 @@ pure-JavaScript implementation.
 ```
  Serial / SerialPort ──depends on──► SerialTransport
                                           ▲           ▲
-                          UsbSerialModule │           │ VirtualSerialTransport
+                          UsbSerialModule │           │ InMemorySerialTransport
                           (real, native)              (in-memory, no native deps)
 ```
 
-Because `VirtualSerialTransport` has **no `react-native` dependency**, the same
+Because `InMemorySerialTransport` has **no `react-native` dependency**, the same
 code runs under Node/Jest, on a real Android device, and on the web.
 
 ---
@@ -29,10 +29,10 @@ code runs under Node/Jest, on a real Android device, and on the web.
 
 ```ts
 import {Serial, setUsbSerial, resetUsbSerial} from 'react-native-web-serial-api';
-import {VirtualSerialTransport} from 'react-native-web-serial-api/testing';
+import {InMemorySerialTransport} from 'react-native-web-serial-api/testing';
 
 // (1) explicit — recommended in unit tests
-const transport = new VirtualSerialTransport();
+const transport = new InMemorySerialTransport();
 const serial = new Serial(transport);
 
 // (2) global — redirects the singleton `serial` too. Call it before the first
@@ -45,22 +45,22 @@ subpath, so they stay out of your production bundle.
 
 ---
 
-## VirtualSerialTransport
+## InMemorySerialTransport
 
 An in-memory transport backing one or more simulated devices. You register a
-[`SerialDevice`](#simulating-a-whole-device-serialdevice) and the transport
+[`SimulatedDevice`](#simulating-a-whole-device-SimulatedDevice) and the transport
 reads its USB identity; `options` carries the transport-side knobs.
 
 ```ts
-import {VirtualSerialTransport, EchoDevice} from 'react-native-web-serial-api/testing';
+import {InMemorySerialTransport, LoopbackDevice} from 'react-native-web-serial-api/testing';
 
-const transport = new VirtualSerialTransport({
+const transport = new InMemorySerialTransport({
   latencyMs: 0,            // 0 = resolve on a microtask (deterministic for Jest)
   autoGrantPermission: true,
 });
 
 const device = transport.addDevice(
-  new EchoDevice({usbVendorId: 0x0403, usbProductId: 0x6001, serialNumber: 'DEMO-1'}),
+  new LoopbackDevice({usbVendorId: 0x0403, usbProductId: 0x6001, serialNumber: 'DEMO-1'}),
   {
     hasPermission: true,   // false → hidden from getPorts() until requestPort()
     loopbackSignals: true, // DTR→DSR+DCD, RTS→CTS, so getSignals reflects setSignals
@@ -68,8 +68,8 @@ const device = transport.addDevice(
 );
 ```
 
-`EchoDevice` (loopback) and `SilentDevice` (accepts writes, sends nothing) are
-built in; for anything richer, write a `SerialDevice` (next section).
+`LoopbackDevice` (loopback) and `SinkDevice` (accepts writes, sends nothing) are
+built in; for anything richer, write a `SimulatedDevice` (next section).
 
 ### Driving a device from a test/UI
 
@@ -88,17 +88,17 @@ what the next `requestPort()` returns.
 
 ---
 
-## Simulating a whole device (`SerialDevice`)
+## Simulating a whole device (`SimulatedDevice`)
 
 To model a *whole* peripheral — a stateful protocol that greets on open, streams
 over time, reacts to control signals, and raises typed errors — extend
-**`SerialDevice`** and override the lifecycle hooks:
+**`SimulatedDevice`** and override the lifecycle hooks:
 
 ```ts
-import {SerialDevice, VirtualSerialTransport} from 'react-native-web-serial-api/testing';
+import {SimulatedDevice, InMemorySerialTransport} from 'react-native-web-serial-api/testing';
 import {Serial} from 'react-native-web-serial-api';
 
-class Thermometer extends SerialDevice {
+class Thermometer extends SimulatedDevice {
   usbVendorId = 0x0403;
   usbProductId = 0x6001;
   #timer?: ReturnType<typeof setInterval>;
@@ -114,7 +114,7 @@ class Thermometer extends SerialDevice {
   onClose() { clearInterval(this.#timer); }
 }
 
-const transport = new VirtualSerialTransport();
+const transport = new InMemorySerialTransport();
 transport.addDevice(new Thermometer(), {hasPermission: true});
 const serial = new Serial(transport);
 ```
@@ -123,8 +123,8 @@ Hooks: `onOpen(options)`, `onData(data)`, `onHostSignals(signals)`, `onClose()`
 (all optional, may be async). Helpers: `this.send(bytes|string)`,
 `this.raiseError(message, name?)` (e.g. `'BreakError'`),
 `this.setSignals({dataCarrierDetect, clearToSend, ringIndicator, dataSetReady})`,
-`this.openOptions`. **`EchoDevice`** (loopback), **`SilentDevice`**, and
-**`LineDevice`** (buffers to `\n`, calls `onLine(line)`) are built in.
+`this.openOptions`. **`LoopbackDevice`** (loopback), **`SinkDevice`**, and
+**`LineBufferedDevice`** (buffers to `\n`, calls `onLine(line)`) are built in.
 `addDevice(device, options?)` reads the device's
 `usbVendorId`/`usbProductId`/`serialNumber`; `options` carries the transport
 knobs (`hasPermission`, `portNumber`, …).
@@ -138,11 +138,17 @@ No native mocks required — inject the transport and exercise the real
 
 ```ts
 import {Serial} from 'react-native-web-serial-api';
-import {VirtualSerialTransport} from 'react-native-web-serial-api/testing';
+import {
+  InMemorySerialTransport,
+  LoopbackDevice,
+} from 'react-native-web-serial-api/testing';
 
 it('echoes bytes through the streams', async () => {
-  const transport = new VirtualSerialTransport();
-  transport.addDevice({usbVendorId: 0x0403, usbProductId: 0x6001, hasPermission: true});
+  const transport = new InMemorySerialTransport();
+  transport.addDevice(
+    new LoopbackDevice({usbVendorId: 0x0403, usbProductId: 0x6001}),
+    {hasPermission: true},
+  );
   const serial = new Serial(transport);
 
   const [port] = await serial.getPorts();
@@ -161,16 +167,16 @@ repo's [`jest.config.js`](jest.config.js).
 
 ---
 
-## Testing as the host: `SerialTestHarness`
+## Testing as the host: `SerialClient`
 
-`SerialTestHarness` is a fluent, timeout-aware wrapper around any `SerialPort` (virtual,
+`SerialClient` is a fluent, timeout-aware wrapper around any `SerialPort` (virtual,
 real-USB, or WebSocket-backed). It eliminates the boilerplate of managing
 `ReadableStream` readers/writers in test code.
 
 ```ts
-import {SerialTestHarness} from 'react-native-web-serial-api/testing';
+import {SerialClient} from 'react-native-web-serial-api/testing';
 
-const client = new SerialTestHarness(port);
+const client = new SerialClient(port);
 await client.open({baudRate: 115200});
 
 await client.write([0x01, 0x02, 0x03]);
@@ -202,25 +208,25 @@ await client.close(); // idempotent; releases locks
 
 All read methods accept `{timeout?: number}` (default 5 s).
 
-### Building a protocol client on `SerialTestHarness`
+### Building a protocol client on `SerialClient`
 
 `readAvailable` is the right primitive for a framing decoder that accumulates
 bytes until a complete message appears:
 
 ```ts
-import {SerialTestHarness} from 'react-native-web-serial-api/testing';
+import {SerialClient} from 'react-native-web-serial-api/testing';
 import {SlipDecoder} from './slip';
 
 class MyProtocolClient {
-  #client: SerialTestHarness;
+  #client: SerialClient;
   #pending: MyMessage[] = [];
 
   static async open(port: SerialPort, baudRate = 115200) {
-    const c = new MyProtocolClient(new SerialTestHarness(port));
+    const c = new MyProtocolClient(new SerialClient(port));
     await c.#client.open({baudRate});
     return c;
   }
-  private constructor(client: SerialTestHarness) { this.#client = client; }
+  private constructor(client: SerialClient) { this.#client = client; }
 
   async recv(timeoutMs = 5000): Promise<MyMessage> {
     if (this.#pending.length) return this.#pending.shift()!;
@@ -241,26 +247,26 @@ class MyProtocolClient {
 
 ---
 
-## One-call fixture: `mountSerialDevice`
+## One-call fixture: `createDeviceFixture`
 
-`mountSerialDevice` wires up a `SerialDevice` in a single call and returns every
+`createDeviceFixture` wires up a `SimulatedDevice` in a single call and returns every
 handle you need in a test:
 
 ```ts
-import {mountSerialDevice, SerialTestHarness} from 'react-native-web-serial-api/testing';
+import {createDeviceFixture, SerialClient} from 'react-native-web-serial-api/testing';
 import {WMBusGateway} from './devices/wmbus/WMBusGateway';
 
-const {port, device, serialDevice, whenOpened, whenClosed} =
-  await mountSerialDevice(new WMBusGateway('iU891A-XL'));
+const {port, device, SimulatedDevice, whenOpened, whenClosed} =
+  await createDeviceFixture(new WMBusGateway('iU891A-XL'));
 
 // host side — open the port and start talking
-const client = new SerialTestHarness(port);
+const client = new SerialClient(port);
 const opened = whenOpened();     // capture the promise before open()
 await client.open({baudRate: 115200});
 await opened;                    // resolves once the device processes onOpen()
 
 // device side — drive the simulator
-serialDevice.addMeter(meter);
+SimulatedDevice.addMeter(meter);
 meter.sendTelegram();            // device emits a 0x20 frame
 const frame = await client.readBytes(frameLen);
 
@@ -272,7 +278,7 @@ await client.close();
 Multiple devices at once:
 
 ```ts
-const {ports, transport} = await mountSerialDevice([
+const {ports, transport} = await createDeviceFixture([
   new WMBusGateway('iU891A-XL'),
   new NmeaGpsDevice(),
 ]);
@@ -286,7 +292,7 @@ const {ports, transport} = await mountSerialDevice([
 
 ## Lifecycle awaiting: `whenOpened` / `whenClosed`
 
-Both `mountSerialDevice` and the lower-level `VirtualSerialDevice` expose
+Both `createDeviceFixture` and the lower-level `DeviceHandle` expose
 `whenOpened()` / `whenClosed()` so a test can synchronise with the app rather
 than polling:
 
@@ -315,7 +321,7 @@ await device.whenOpened();
 
 ## Fault injection
 
-`VirtualSerialDevice` has a rich set of fault-injection handles:
+`DeviceHandle` has a rich set of fault-injection handles:
 
 ```ts
 device.push([0x01, 0x02]);         // device sends bytes to the host unprompted
@@ -343,14 +349,14 @@ expect(device.written).toHaveLength(0); // nothing got through
 
 ---
 
-## Writing a test suite: `runSerialTests` + `compareResults`
+## Writing a test suite: `runTestSuite` + `compareTestResults`
 
-`runSerialTests` runs an array of named tests against a port and returns
+`runTestSuite` runs an array of named tests against a port and returns
 structured results — no test-runner dependency, so the same suite runs in Jest
 (virtual port) **and on a real device** (USB or WebSocket):
 
 ```ts
-import {runSerialTests, compareResults, type SerialTest}
+import {runTestSuite, compareTestResults, type SerialTest}
   from 'react-native-web-serial-api/testing';
 
 const suite: SerialTest[] = [
@@ -366,22 +372,22 @@ const suite: SerialTest[] = [
 ];
 
 // Run against the virtual device:
-const {port} = await mountSerialDevice(new EchoDevice(id));
-const ref = await runSerialTests(suite, port, {open: {baudRate: 115200}});
+const {port} = await createDeviceFixture(new LoopbackDevice(id));
+const ref = await runTestSuite(suite, port, {open: {baudRate: 115200}});
 
 // Run against the real device:
-const real = await runSerialTests(suite, realPort, {open: {baudRate: 115200}});
+const real = await runTestSuite(suite, realPort, {open: {baudRate: 115200}});
 
 // Pass only tests where BOTH runtimes agree (both passed or both failed):
-const agreed = compareResults(ref, real);
+const agreed = compareTestResults(ref, real);
 ```
 
-`runSerialTests` options:
+`runTestSuite` options:
 
 | Option | Default | Meaning |
 |--------|---------|---------|
 | `open` | `{baudRate:9600}` | Options forwarded to `port.open()` |
-| `shared` | `true` | One `SerialTestHarness` for all tests; `false` opens/closes per test |
+| `shared` | `true` | One `SerialClient` for all tests; `false` opens/closes per test |
 | `client` | — | Custom `{connect, disconnect}` pair for protocol clients (see below) |
 | `progress` | — | `{onStart?, onResult?}` callbacks for live UI updates |
 
@@ -391,11 +397,11 @@ Pass `options.client` to use a custom client type with your suite (the same
 client is passed to every `run` function):
 
 ```ts
-import {runSerialTests, type SerialTestClient}
+import {runTestSuite, type SerialTestClient}
   from 'react-native-web-serial-api/testing';
 import {HciHost} from './HciHost';
 
-const results = await runSerialTests(hciSuite, port, {
+const results = await runTestSuite(hciSuite, port, {
   open: {baudRate: 115200},
   client: {
     connect: (p) => HciHost.open(p),
@@ -408,21 +414,21 @@ const results = await runSerialTests(hciSuite, port, {
 
 ## WebSocket E2E: `exposeSerialDevice`
 
-`exposeSerialDevice` runs a `SerialDevice` simulator behind a real `ws`
+`exposeSerialDevice` runs a `SimulatedDevice` simulator behind a real `ws`
 WebSocket server, so a real app (on a device, an emulator, or the browser) can
 connect to it with `new Serial(new WebSocketSerialTransport(url))` and exercise
 the *same* simulated peripheral your Jest tests drive.
 
-The test process keeps both handles: the `SerialDevice` (to drive the device
+The test process keeps both handles: the `SimulatedDevice` (to drive the device
 side) and the server URL (for the app to connect to). The same device-specific
 suite can therefore run in two modes without any code changes:
 
 ```ts
 // Jest (in-memory) ────────────────────────────────────────────────────────
-import {mountSerialDevice, runSerialTests} from 'react-native-web-serial-api/testing';
+import {createDeviceFixture, runTestSuite} from 'react-native-web-serial-api/testing';
 
-const {port} = await mountSerialDevice(new WMBusGateway('iU891A-XL'));
-const results = await runSerialTests(wmbusSuite, port, {open: {baudRate: 115200}});
+const {port} = await createDeviceFixture(new WMBusGateway('iU891A-XL'));
+const results = await runTestSuite(wmbusSuite, port, {open: {baudRate: 115200}});
 
 // On-device / emulator (real WebSocket) ──────────────────────────────────
 import {exposeSerialDevice} from 'react-native-web-serial-api/testing';
@@ -435,18 +441,18 @@ const ex = exposeSerialDevice(new WMBusGateway('iU891A-XL'), {
 });
 // app connects with: new Serial(new WebSocketSerialTransport('ws://10.0.2.2:8090'))
 await ex.whenOpened();
-const results = await runSerialTests(wmbusSuite, appPort, {open: {baudRate: 115200}});
+const results = await runTestSuite(wmbusSuite, appPort, {open: {baudRate: 115200}});
 await ex.close();
 ```
 
-`ExposedSerialDevice` fields:
+`ExposedDevice` fields:
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `url` | `string` | `ws://host:port` — pass to `WebSocketSerialTransport` |
-| `serialDevice` | `D` | The concrete simulator (typed — call `gateway.addMeter`, etc.) |
-| `device` | `VirtualSerialDevice` | Low-level handle (push/emitError/whenOpened/…) |
-| `whenOpened()` | `Promise<SerialDeviceOpenOptions>` | Resolves when the app opens the port |
+| `simulatedDevice` | `D` | The concrete simulator (typed — call `gateway.addMeter`, etc.) |
+| `device` | `DeviceHandle` | Low-level handle (push/emitError/whenOpened/…) |
+| `whenOpened()` | `Promise<SimulatedDeviceOpenOptions>` | Resolves when the app opens the port |
 | `whenClosed()` | `Promise<void>` | Resolves when the app closes the port |
 | `close()` | `Promise<void>` | Stops the WebSocket server |
 
@@ -460,9 +466,9 @@ Node process. Pass `options.WebSocketServer` to skip the lazy load entirely
 
 ## Fake-timer gotcha
 
-`VirtualSerialTransport` delivers data via `queueMicrotask` (at `latencyMs:0`,
+`InMemorySerialTransport` delivers data via `queueMicrotask` (at `latencyMs:0`,
 the default). If your test uses `jest.useFakeTimers()`, microtasks still run
-fine — but `SerialTestHarness`'s read timeouts use `setTimeout`, so **fake timers
+fine — but `SerialClient`'s read timeouts use `setTimeout`, so **fake timers
 will stall reads unless you advance them**.
 
 If your suite uses `setInterval` for periodic streaming, always opt out of
@@ -484,7 +490,7 @@ it('streams data periodically', async () => {
 ```
 
 If your tests don't use `setInterval` or per-second streaming, you typically
-don't need fake timers at all — real `setTimeout` in `SerialTestHarness` ensures
+don't need fake timers at all — real `setTimeout` in `SerialClient` ensures
 that timeouts resolve (or reject) without any manual advancing.
 
 ---
@@ -493,7 +499,7 @@ that timeouts resolve (or reject) without any manual advancing.
 
 [`src/__tests__/conformance-suite.ts`](src/__tests__/conformance-suite.ts) exports
 `serialConformanceTests` — self-contained cases (each builds its own
-`Serial` + `VirtualSerialTransport`) with built-in assertions and **no
+`Serial` + `InMemorySerialTransport`) with built-in assertions and **no
 test-runner dependency**. It is **test-only code**: it is excluded from the
 build and from the published npm package (it imports the shipped testing
 utilities, not the other way round), so it adds nothing to consumers' bundles.
@@ -552,8 +558,8 @@ The [example app](example) ships two ways to test on real hardware (or none):
   in-app and shows pass/fail, plus a *Run on connected device* smoke test. This
   works on Android, web, and in an emulator with **no device attached**.
 - **Virtual device (demo)** toggle (overflow menu) injects a
-  `VirtualSerialTransport` (an FTDI `EchoDevice` + a CP210x `SensorDevice`, both
-  authored as `SerialDevice`s — see [example/src/devices/](example/src/devices))
+  `InMemorySerialTransport` (an FTDI `LoopbackDevice` + a CP210x `SensorDevice`, both
+  authored as `SimulatedDevice`s — see [example/src/devices/](example/src/devices))
   so the whole Devices → Connect → Terminal flow runs hardware-free.
 
 > **Platform note:** demo mode redirects the app's live serial, which only works
@@ -566,21 +572,21 @@ The [example app](example) ships two ways to test on real hardware (or none):
 
 ## E2E in the emulator
 
-The same `SerialDevice` mocks let you run **UI E2E tests** against an app with no
+The same `SimulatedDevice` mocks let you run **UI E2E tests** against an app with no
 USB hardware. Install the mock once at startup behind your own flag:
 
 ```ts
 // index.js — debug/E2E build only
-import {installSerialMock, EchoDevice} from 'react-native-web-serial-api/testing';
+import {installSerialMock, LoopbackDevice} from 'react-native-web-serial-api/testing';
 import {MyThermometer} from './devices/MyThermometer';
 
 installSerialMock({
   enabled: process.env.RNWS_SERIAL_MOCK === '1',   // your own gate
-  devices: [new EchoDevice(), new MyThermometer()],
+  devices: [new LoopbackDevice(), new MyThermometer()],
 });
 ```
 
-`installSerialMock` builds a `VirtualSerialTransport` and calls `setUsbSerial`, so
+`installSerialMock` builds a `InMemorySerialTransport` and calls `setUsbSerial`, so
 `navigator.serial` now talks to your simulated devices.
 
 The example app ships a **Maestro** suite ([example/.maestro/](example/.maestro))

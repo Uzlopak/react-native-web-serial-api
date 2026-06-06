@@ -1,5 +1,5 @@
 /**
- * Pure NMEA 0183 sentence generation — no `react-native`, no `SerialDevice`,
+ * Pure NMEA 0183 sentence generation — no `react-native`, no `SimulatedDevice`,
  * no transport. Every sentence flows through the same primitives (one
  * checksum, one coordinate formatter, one `$..*HH\r\n` wrapper, one builder
  * table), so adding a sentence is a one-liner and nothing is repeated.

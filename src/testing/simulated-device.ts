@@ -1,15 +1,15 @@
 /**
- * SerialDevice — author a complete simulated serial peripheral.
+ * SimulatedDevice — author a complete simulated serial peripheral.
  *
  * Extend the class and override the lifecycle hooks to model a real device's
  * whole behaviour (firmware/protocol): react to `open()`, to bytes the host
  * writes, to control-signal changes, and stream data back over time. It is
- * hosted by a {@link VirtualSerialTransport} ({@link ./virtual-serial}) and is
+ * hosted by an {@link InMemorySerialTransport} ({@link ./virtual-serial}) and is
  * free of any `react-native` dependency, so the same device runs under Jest,
  * in a browser, and inside a React Native app on a device/emulator (for E2E).
  *
  * @example
- * class Thermometer extends SerialDevice {
+ * class Thermometer extends SimulatedDevice {
  *   usbVendorId = 0x0403;
  *   usbProductId = 0x6001;
  *   #timer?: ReturnType<typeof setInterval>;
@@ -26,7 +26,7 @@
 import type {OpenOptions} from '../transport';
 
 /** The negotiated connection parameters (native parity code: 0 none/1 odd/2 even). */
-export type SerialDeviceOpenOptions = Required<OpenOptions>;
+export type SimulatedDeviceOpenOptions = Required<OpenOptions>;
 
 /** Device-asserted input signals — what the host reads via getSignals(). */
 export type SerialInputSignals = {
@@ -37,22 +37,22 @@ export type SerialInputSignals = {
 };
 
 /** Host-asserted output signals (DTR/RTS/break) the device observes. */
-export type SerialHostSignals = {
+export type HostSignals = {
   dataTerminalReady: boolean;
   requestToSend: boolean;
   break: boolean;
 };
 
 /**
- * The handle a {@link SerialDevice} uses to talk back to the host. Provided by
- * the transport; you normally use the `protected` helpers on `SerialDevice`
+ * The handle a {@link SimulatedDevice} uses to talk back to the host. Provided by
+ * the transport; you normally use the `protected` helpers on `SimulatedDevice`
  * rather than this directly.
  */
-export interface SerialDeviceHost {
+export interface SimulatedDeviceHost {
   readonly deviceId: number;
   readonly portNumber: number;
   readonly isOpen: boolean;
-  readonly openOptions: SerialDeviceOpenOptions | null;
+  readonly openOptions: SimulatedDeviceOpenOptions | null;
   send(bytes: number[]): void;
   raiseError(message: string, name?: string): void;
   setSignals(signals: SerialInputSignals): void;
@@ -72,7 +72,7 @@ export function toBytes(data: number[] | Uint8Array | string): number[] {
  * care about (all default to no-ops and may be async) and use the `protected`
  * helpers to drive the host.
  */
-export abstract class SerialDevice {
+export abstract class SimulatedDevice {
   /** USB Vendor ID this device reports for enumeration. */
   abstract readonly usbVendorId: number;
   /** USB Product ID this device reports for enumeration. */
@@ -80,10 +80,10 @@ export abstract class SerialDevice {
   /** Optional USB serial number. */
   readonly serialNumber?: string;
 
-  #host: SerialDeviceHost | null = null;
+  #host: SimulatedDeviceHost | null = null;
 
-  /** @internal Bind the transport host (called by VirtualSerialTransport). */
-  _bind(host: SerialDeviceHost): void {
+  /** @internal Bind the transport host (called by InMemorySerialTransport). */
+  _bind(host: SimulatedDeviceHost): void {
     this.#host = host;
   }
 
@@ -107,7 +107,7 @@ export abstract class SerialDevice {
   }
 
   /** The parameters the host opened the port with, or null when closed. */
-  protected get openOptions(): SerialDeviceOpenOptions | null {
+  protected get openOptions(): SimulatedDeviceOpenOptions | null {
     return this.#host?.openOptions ?? null;
   }
 
@@ -120,29 +120,29 @@ export abstract class SerialDevice {
   }
 
   /** The host opened the port. */
-  onOpen(_options: SerialDeviceOpenOptions): void | Promise<void> {}
+  onOpen(_options: SimulatedDeviceOpenOptions): void | Promise<void> {}
   /** The host wrote bytes to the device. */
   onData(_data: Uint8Array): void | Promise<void> {}
   /** The host changed DTR/RTS/break. */
-  onHostSignals(_signals: SerialHostSignals): void | Promise<void> {}
+  onHostSignals(_signals: HostSignals): void | Promise<void> {}
   /** The host closed the port. */
   onClose(): void | Promise<void> {}
 }
 
-/** Optional USB identity for the built-in devices. */
-export type DeviceIdentity = {
+/** Optional USB identity for built-in devices. */
+export type SimulatedDeviceIdentity = {
   usbVendorId?: number;
   usbProductId?: number;
   serialNumber?: string;
 };
 
 /** A loopback device: every byte written is echoed straight back. */
-export class EchoDevice extends SerialDevice {
+export class LoopbackDevice extends SimulatedDevice {
   readonly usbVendorId: number;
   readonly usbProductId: number;
   readonly serialNumber?: string;
 
-  constructor(identity: DeviceIdentity = {}) {
+  constructor(identity: SimulatedDeviceIdentity = {}) {
     super();
     this.usbVendorId = identity.usbVendorId ?? 0x0403;
     this.usbProductId = identity.usbProductId ?? 0x6001;
@@ -158,7 +158,7 @@ export class EchoDevice extends SerialDevice {
  * Base for a line-oriented command/response device: buffers incoming bytes and
  * calls {@link onLine} for each `\n`-terminated line (trailing CR/LF stripped).
  */
-export abstract class LineDevice extends SerialDevice {
+export abstract class LineBufferedDevice extends SimulatedDevice {
   #buffer = '';
 
   /** Handle one line received from the host. */
@@ -179,12 +179,12 @@ export abstract class LineDevice extends SerialDevice {
 }
 
 /** A device that accepts writes but never sends anything back. */
-export class SilentDevice extends SerialDevice {
+export class SinkDevice extends SimulatedDevice {
   readonly usbVendorId: number;
   readonly usbProductId: number;
   readonly serialNumber?: string;
 
-  constructor(identity: DeviceIdentity = {}) {
+  constructor(identity: SimulatedDeviceIdentity = {}) {
     super();
     this.usbVendorId = identity.usbVendorId ?? 0x0403;
     this.usbProductId = identity.usbProductId ?? 0x6001;

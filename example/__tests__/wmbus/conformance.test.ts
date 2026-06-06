@@ -5,7 +5,7 @@
  * it is the reference a real device is compared to on the Self Test screen.
  */
 import {describe, expect, it} from '@jest/globals';
-import {compareResults} from 'react-native-web-serial-api/testing';
+import {compareTestResults} from 'react-native-web-serial-api/testing';
 import {
   compareWithSimulator,
   makeVirtualGatewayPort,
@@ -29,7 +29,7 @@ describe('WM-Bus gateway conformance suite', () => {
   }, 60000);
 
   it('treats matching pass/fail outcomes as identical', () => {
-    const compared = compareResults(
+    const compared = compareTestResults(
       [
         {name: 'A', passed: true, durationMs: 1},
         {name: 'B', passed: false, error: 'sim failed', durationMs: 2},
@@ -47,7 +47,7 @@ describe('WM-Bus gateway conformance suite', () => {
   });
 
   it('reports mismatches and unexpected device-only cases', () => {
-    const compared = compareResults(
+    const compared = compareTestResults(
       [{name: 'A', passed: true, durationMs: 1}],
       [
         {name: 'A', passed: false, error: 'timeout', durationMs: 5},

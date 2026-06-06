@@ -1,5 +1,5 @@
 /**
- * VirtualSerialTransport — an in-memory {@link SerialTransport} for tests and
+ * InMemorySerialTransport — an in-memory {@link SerialTransport} for tests and
  * on-device demos.
  *
  * It implements the exact same interface the production `UsbSerialModule` does,
@@ -13,8 +13,8 @@
  * Inject it via `new Serial(transport)` or globally with `setUsbSerial(transport)`.
  *
  * @example
- * const transport = new VirtualSerialTransport();
- * transport.addDevice(new EchoDevice(), {hasPermission: true});
+ * const transport = new InMemorySerialTransport();
+ * transport.addDevice(new LoopbackDevice(), {hasPermission: true});
  * const serial = new Serial(transport);
  * const [port] = await serial.getPorts();
  * await port.open({baudRate: 115200});
@@ -36,13 +36,13 @@ import type {
 } from '../transport';
 import {DEFAULT_OPEN_OPTIONS} from '../transport';
 import type {
-  SerialDevice,
-  SerialDeviceHost,
   SerialInputSignals,
-} from './serial-device';
+  SimulatedDevice,
+  SimulatedDeviceHost,
+} from './simulated-device';
 
-/** Transport-side knobs when registering a {@link SerialDevice}. */
-export type VirtualSerialDeviceOptions = {
+/** Transport-side knobs when registering a {@link SimulatedDevice}. */
+export type DeviceOptions = {
   /** Whether the app already holds USB permission. Defaults to false. */
   hasPermission?: boolean;
   /** Defaults to 0. A USB device may expose several ports. */
@@ -63,9 +63,9 @@ export type VirtualSerialDeviceOptions = {
   flowControlThreshold?: number;
 };
 
-export type VirtualSerialTransportOptions = {
+export type InMemorySerialTransportOptions = {
   /** Devices to register on construction (same as calling addDevice). */
-  devices?: SerialDevice[];
+  devices?: SimulatedDevice[];
   /**
    * Delay (ms) applied to async operations and to inbound data delivery.
    * 0 (default) resolves on a microtask — deterministic for Jest. A small
@@ -113,11 +113,11 @@ function mapInputSignals(s: SerialInputSignals): Partial<InputSignals> {
 }
 
 /**
- * A simulated USB-serial device. Returned by {@link VirtualSerialTransport.addDevice}.
+ * A simulated USB-serial device. Returned by {@link InMemorySerialTransport.addDevice}.
  * The mutable fields and the helper methods let a test or demo drive the device
  * the way physical hardware (and a human plugging cables) otherwise would.
  */
-export class VirtualSerialDevice {
+export class DeviceHandle {
   readonly usbVendorId: number;
   readonly usbProductId: number;
   readonly portNumber: number;
@@ -130,7 +130,7 @@ export class VirtualSerialDevice {
   isOpen = false;
   reading = false;
   /** The hosted behaviour. */
-  readonly serialDevice: SerialDevice;
+  readonly simulatedDevice: SimulatedDevice;
   loopbackSignals: boolean;
   flowControl: FlowControl = 'NONE';
   flowControlThreshold: number;
@@ -159,17 +159,17 @@ export class VirtualSerialDevice {
   readonly written: number[][] = [];
 
   readonly #fails = new Set<FailableOp>();
-  readonly #transport: VirtualSerialTransport;
+  readonly #transport: InMemorySerialTransport;
 
   constructor(
-    transport: VirtualSerialTransport,
+    transport: InMemorySerialTransport,
     deviceId: number,
-    device: SerialDevice,
-    options: VirtualSerialDeviceOptions,
+    device: SimulatedDevice,
+    options: DeviceOptions,
   ) {
     this.#transport = transport;
     this.deviceId = deviceId;
-    this.serialDevice = device;
+    this.simulatedDevice = device;
     this.usbVendorId = device.usbVendorId;
     this.usbProductId = device.usbProductId;
     this.portNumber = options.portNumber ?? 0;
@@ -280,10 +280,10 @@ export class VirtualSerialDevice {
 type Listener<E> = (event: E) => void;
 
 /**
- * In-memory transport backing one or more {@link VirtualSerialDevice}s.
+ * In-memory transport backing one or more {@link DeviceHandle}s.
  */
-export class VirtualSerialTransport implements SerialTransport {
-  readonly #devices: VirtualSerialDevice[] = [];
+export class InMemorySerialTransport implements SerialTransport {
+  readonly #devices: DeviceHandle[] = [];
   readonly #latencyMs: number;
   readonly #autoGrant: boolean;
   readonly #chunkSize: number;
@@ -296,12 +296,12 @@ export class VirtualSerialTransport implements SerialTransport {
 
   /** Scripts the next showPortPicker() outcome. */
   #pendingPick:
-    | VirtualSerialDevice
-    | ((d: VirtualSerialDevice) => boolean)
+    | DeviceHandle
+    | ((d: DeviceHandle) => boolean)
     | 'reject'
     | null = null;
 
-  constructor(options: VirtualSerialTransportOptions = {}) {
+  constructor(options: InMemorySerialTransportOptions = {}) {
     this.#latencyMs = options.latencyMs ?? 0;
     this.#autoGrant = options.autoGrantPermission ?? true;
     this.#chunkSize = options.chunkSize ?? 0;
@@ -311,32 +311,32 @@ export class VirtualSerialTransport implements SerialTransport {
   // ── Device management ──────────────────────────────────────────────────────
 
   /** All devices known to the transport (attached or not). */
-  get devices(): readonly VirtualSerialDevice[] {
+  get devices(): readonly DeviceHandle[] {
     return this.#devices;
   }
 
   /**
-   * Register a {@link SerialDevice}. It starts attached but does not fire
+   * Register a {@link SimulatedDevice}. It starts attached but does not fire
    * "connect"; its identity (usbVendorId/usbProductId/serialNumber) is read from
    * the device, and `options` carries the transport-side knobs.
    */
   addDevice(
-    serialDevice: SerialDevice,
-    options: VirtualSerialDeviceOptions = {},
-  ): VirtualSerialDevice {
-    const device = new VirtualSerialDevice(
+    simulatedDevice: SimulatedDevice,
+    options: DeviceOptions = {},
+  ): DeviceHandle {
+    const device = new DeviceHandle(
       this,
       this.#nextDeviceId++,
-      serialDevice,
+      simulatedDevice,
       options,
     );
-    serialDevice._bind(this.#hostFor(device));
+    simulatedDevice._bind(this.#hostFor(device));
     this.#devices.push(device);
     return device;
   }
 
-  /** The handle a hosted {@link SerialDevice} uses to talk back to the host. */
-  #hostFor(device: VirtualSerialDevice): SerialDeviceHost {
+  /** The handle a hosted {@link SimulatedDevice} uses to talk back to the host. */
+  #hostFor(device: DeviceHandle): SimulatedDeviceHost {
     return {
       get deviceId() {
         return device.deviceId;
@@ -362,23 +362,23 @@ export class VirtualSerialTransport implements SerialTransport {
       const result = fn();
       if (result && typeof (result as Promise<void>).then === 'function') {
         (result as Promise<void>).catch((err: unknown) => {
-          console.error('SerialDevice hook rejected:', err);
+          console.error('SimulatedDevice hook rejected:', err);
         });
       }
     } catch (err) {
-      console.error('SerialDevice hook threw:', err);
+      console.error('SimulatedDevice hook threw:', err);
     }
   }
 
   /** Remove a device entirely; detaches it first if attached. */
-  removeDevice(device: VirtualSerialDevice): void {
+  removeDevice(device: DeviceHandle): void {
     if (device.attached) this.detach(device);
     const i = this.#devices.indexOf(device);
     if (i >= 0) this.#devices.splice(i, 1);
   }
 
   /** (Re)attach a device, assigning it a fresh deviceId, and fire "connect". */
-  attach(device: VirtualSerialDevice): void {
+  attach(device: DeviceHandle): void {
     device.deviceId = this.#nextDeviceId++;
     device.attached = true;
     this.#emit(this.#connectListeners, {
@@ -389,7 +389,7 @@ export class VirtualSerialTransport implements SerialTransport {
   }
 
   /** Detach a device and fire "disconnect"; any open port becomes closed. */
-  detach(device: VirtualSerialDevice, lost = false): void {
+  detach(device: DeviceHandle, lost = false): void {
     const {deviceId, usbVendorId, usbProductId} = device;
     const wasOpen = device.isOpen;
     device.attached = false;
@@ -405,15 +405,13 @@ export class VirtualSerialTransport implements SerialTransport {
   }
 
   /** Simulate an unplug while open: error the stream first, then disconnect. */
-  loseDevice(device: VirtualSerialDevice): void {
+  loseDevice(device: DeviceHandle): void {
     if (device.isOpen) this._error(device, 'Device disconnected');
     this.detach(device, true);
   }
 
   /** Script the next showPortPicker() resolution (a device or a predicate). */
-  selectNextPort(
-    target: VirtualSerialDevice | ((d: VirtualSerialDevice) => boolean),
-  ): void {
+  selectNextPort(target: DeviceHandle | ((d: DeviceHandle) => boolean)): void {
     this.#pendingPick = target;
   }
 
@@ -422,10 +420,10 @@ export class VirtualSerialTransport implements SerialTransport {
     this.#pendingPick = 'reject';
   }
 
-  // ── Internal event helpers (called by VirtualSerialDevice) ───────────────────────
+  // ── Internal event helpers (called by DeviceHandle) ──────────────────────────────
 
   /** @internal deliver inbound bytes to the host's readable stream. */
-  _deliver(device: VirtualSerialDevice, data: number[]): void {
+  _deliver(device: DeviceHandle, data: number[]): void {
     if (!device.attached || !device.isOpen || !device.reading) return;
 
     if (device.overrunLimit != null) {
@@ -446,7 +444,7 @@ export class VirtualSerialTransport implements SerialTransport {
   }
 
   /** @internal raise a read error for a device's open port. */
-  _error(device: VirtualSerialDevice, message: string, name?: string): void {
+  _error(device: DeviceHandle, message: string, name?: string): void {
     const event: ErrorEvent = {
       deviceId: device.deviceId,
       portNumber: device.portNumber,
@@ -457,7 +455,7 @@ export class VirtualSerialTransport implements SerialTransport {
   }
 
   /** Deliver `data` as one or more onData events, honouring `chunkSize`. */
-  #emitData(device: VirtualSerialDevice, data: number[]): void {
+  #emitData(device: DeviceHandle, data: number[]): void {
     const emitOne = (slice: number[]) => {
       const event: DataEvent = {
         deviceId: device.deviceId,
@@ -498,7 +496,7 @@ export class VirtualSerialTransport implements SerialTransport {
       d => d.attached && this.#matchesFilters(d, filter),
     );
 
-    let chosen: VirtualSerialDevice | undefined;
+    let chosen: DeviceHandle | undefined;
     if (typeof pick === 'function') {
       chosen = candidates.find(pick);
     } else if (pick) {
@@ -533,7 +531,7 @@ export class VirtualSerialTransport implements SerialTransport {
     device.isOpen = true;
     device.openOptions = {...DEFAULT_OPEN_OPTIONS, ...options};
     device._hwWritten = 0;
-    this.#invokeHook(() => device.serialDevice.onOpen(device.openOptions!));
+    this.#invokeHook(() => device.simulatedDevice.onOpen(device.openOptions!));
     device._notifyOpen(device.openOptions);
     return this.#resolve();
   }
@@ -546,7 +544,7 @@ export class VirtualSerialTransport implements SerialTransport {
     if (device) {
       device.isOpen = false;
       device.reading = false;
-      this.#invokeHook(() => device.serialDevice.onClose());
+      this.#invokeHook(() => device.simulatedDevice.onClose());
       device._notifyClose();
     }
     return this.#resolve();
@@ -574,7 +572,9 @@ export class VirtualSerialTransport implements SerialTransport {
     const bytes = data.map(toByte);
     device.written.push(bytes);
     if (device.flowControl === 'RTS_CTS') device._hwWritten += bytes.length;
-    this.#invokeHook(() => device.serialDevice.onData(Uint8Array.from(bytes)));
+    this.#invokeHook(() =>
+      device.simulatedDevice.onData(Uint8Array.from(bytes)),
+    );
     return this.#resolve();
   }
 
@@ -762,7 +762,7 @@ export class VirtualSerialTransport implements SerialTransport {
         }
       }
       this.#invokeHook(() =>
-        device.serialDevice.onHostSignals({
+        device.simulatedDevice.onHostSignals({
           dataTerminalReady: device.output.dtr,
           requestToSend: device.output.rts,
           break: device.output.brk,
@@ -772,7 +772,7 @@ export class VirtualSerialTransport implements SerialTransport {
     return this.#resolve();
   }
 
-  #toPortId = (d: VirtualSerialDevice): PortId => ({
+  #toPortId = (d: DeviceHandle): PortId => ({
     deviceId: d.deviceId,
     portNumber: d.portNumber,
     usbVendorId: d.usbVendorId,
@@ -781,7 +781,7 @@ export class VirtualSerialTransport implements SerialTransport {
   });
 
   #matchesFilters(
-    device: VirtualSerialDevice,
+    device: DeviceHandle,
     filters: ReadonlyArray<PortFilter>,
   ): boolean {
     if (!filters || filters.length === 0) return true;
@@ -799,10 +799,7 @@ export class VirtualSerialTransport implements SerialTransport {
     });
   }
 
-  #find(
-    deviceId: number,
-    portNumber?: number,
-  ): VirtualSerialDevice | undefined {
+  #find(deviceId: number, portNumber?: number): DeviceHandle | undefined {
     return this.#devices.find(
       d =>
         d.attached &&

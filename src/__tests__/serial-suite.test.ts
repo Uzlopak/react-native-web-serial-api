@@ -1,21 +1,21 @@
 /**
- * Tests for the shipped suite runner: `runSerialTests` (shared vs per-test
- * client, progress hooks, connect-failure handling) and `compareResults`.
+ * Tests for the shipped suite runner: `runTestSuite` (shared vs per-test
+ * client, progress hooks, connect-failure handling) and `compareTestResults`.
  */
 import {describe, expect, it} from '@jest/globals';
 import {
-  compareResults,
-  EchoDevice,
-  LineDevice,
-  mountSerialDevice,
-  runSerialTests,
+  compareTestResults,
+  createDeviceFixture,
+  LineBufferedDevice,
+  LoopbackDevice,
+  runTestSuite,
+  SerialClient,
   type SerialTest,
-  SerialTestHarness,
   type SerialTestResult,
 } from '../testing';
 
 /** Answers PING→PONG so a test can do a real request/response round-trip. */
-class PingDevice extends LineDevice {
+class PingDevice extends LineBufferedDevice {
   readonly usbVendorId = 0x0403;
   readonly usbProductId = 0x6001;
   onLine(line: string): void {
@@ -23,11 +23,11 @@ class PingDevice extends LineDevice {
   }
 }
 
-describe('runSerialTests', () => {
+describe('runTestSuite', () => {
   const tests: SerialTest[] = [
     {
       name: 'ping round-trips',
-      async run(c: SerialTestHarness) {
+      async run(c: SerialClient) {
         await c.write('PING\n');
         if ((await c.readLine()) !== 'PONG') throw new Error('no pong');
       },
@@ -41,8 +41,8 @@ describe('runSerialTests', () => {
   ];
 
   it('runs every case and reports pass/fail without throwing', async () => {
-    const {port} = await mountSerialDevice(new PingDevice());
-    const results = await runSerialTests(tests, port);
+    const {port} = await createDeviceFixture(new PingDevice());
+    const results = await runTestSuite(tests, port);
     expect(results.map(r => [r.name, r.passed])).toEqual([
       ['ping round-trips', true],
       ['deliberately fails', false],
@@ -51,10 +51,10 @@ describe('runSerialTests', () => {
   });
 
   it('streams progress and shares one open client by default', async () => {
-    const {port} = await mountSerialDevice(new PingDevice());
+    const {port} = await createDeviceFixture(new PingDevice());
     const started: string[] = [];
     const finished: SerialTestResult[] = [];
-    await runSerialTests(tests, port, {
+    await runTestSuite(tests, port, {
       progress: {
         onStart: name => started.push(name),
         onResult: r => finished.push(r),
@@ -69,7 +69,7 @@ describe('runSerialTests', () => {
   });
 
   it('opens and closes a fresh client per test when shared is false', async () => {
-    const {port} = await mountSerialDevice(new EchoDevice());
+    const {port} = await createDeviceFixture(new LoopbackDevice());
     let opens = 0;
     const counting: SerialTest[] = [
       {
@@ -89,7 +89,7 @@ describe('runSerialTests', () => {
         },
       },
     ];
-    const results = await runSerialTests(counting, port, {shared: false});
+    const results = await runTestSuite(counting, port, {shared: false});
     expect(results.every(r => r.passed)).toBe(true);
     expect(opens).toBe(2);
     // Each test closed its own client, leaving the port closed and reopenable.
@@ -98,8 +98,8 @@ describe('runSerialTests', () => {
   });
 
   it('reports a single failure when the client cannot connect', async () => {
-    const {port} = await mountSerialDevice(new EchoDevice());
-    const results = await runSerialTests(tests, port, {
+    const {port} = await createDeviceFixture(new LoopbackDevice());
+    const results = await runTestSuite(tests, port, {
       client: {
         connect: async () => {
           throw new Error('cannot open');
@@ -114,14 +114,14 @@ describe('runSerialTests', () => {
   });
 
   it('swallows a disconnect error in shared mode without failing the run', async () => {
-    const {port} = await mountSerialDevice(new EchoDevice());
-    const results = await runSerialTests(
-      [{name: 'x', run: async (_c: SerialTestHarness) => {}}],
+    const {port} = await createDeviceFixture(new LoopbackDevice());
+    const results = await runTestSuite(
+      [{name: 'x', run: async (_c: SerialClient) => {}}],
       port,
       {
         client: {
           connect: async p => {
-            const h = new SerialTestHarness(p);
+            const h = new SerialClient(p);
             await h.open();
             return h;
           },
@@ -135,15 +135,15 @@ describe('runSerialTests', () => {
   });
 
   it('swallows a per-test disconnect error when shared is false', async () => {
-    const {port} = await mountSerialDevice(new EchoDevice());
-    const results = await runSerialTests(
-      [{name: 'x', run: async (_c: SerialTestHarness) => {}}],
+    const {port} = await createDeviceFixture(new LoopbackDevice());
+    const results = await runTestSuite(
+      [{name: 'x', run: async (_c: SerialClient) => {}}],
       port,
       {
         shared: false,
         client: {
           connect: async p => {
-            const h = new SerialTestHarness(p);
+            const h = new SerialClient(p);
             await h.open();
             return h;
           },
@@ -156,9 +156,9 @@ describe('runSerialTests', () => {
     expect(results[0].passed).toBe(true);
   });
 
-  it('drives a custom protocol client built on the SerialTestHarness', async () => {
-    const {port} = await mountSerialDevice(new PingDevice());
-    // A trivial "protocol client" that wraps a SerialTestHarness.
+  it('drives a custom protocol client built on the SerialClient', async () => {
+    const {port} = await createDeviceFixture(new PingDevice());
+    // A trivial "protocol client" that wraps a SerialClient.
     type Pinger = {ping(): Promise<string>; close(): Promise<void>};
     const pingerTests: SerialTest<Pinger>[] = [
       {
@@ -168,10 +168,10 @@ describe('runSerialTests', () => {
         },
       },
     ];
-    const results = await runSerialTests(pingerTests, port, {
+    const results = await runTestSuite(pingerTests, port, {
       client: {
         async connect(p) {
-          const inner = new SerialTestHarness(p);
+          const inner = new SerialClient(p);
           await inner.open();
           return {
             async ping() {
@@ -188,7 +188,7 @@ describe('runSerialTests', () => {
   });
 });
 
-describe('compareResults', () => {
+describe('compareTestResults', () => {
   const ref: SerialTestResult[] = [
     {name: 'a', passed: true, durationMs: 1},
     {name: 'b', passed: false, durationMs: 1},
@@ -201,7 +201,7 @@ describe('compareResults', () => {
       {name: 'b', passed: false, durationMs: 1}, // agree (both fail)
       {name: 'c', passed: false, durationMs: 1, error: 'oops'}, // disagree
     ];
-    const rows = compareResults(ref, candidate);
+    const rows = compareTestResults(ref, candidate);
     const byName = new Map(rows.map(r => [r.name, r]));
     expect(byName.get('a')?.passed).toBe(true);
     expect(byName.get('b')?.passed).toBe(true);
@@ -212,7 +212,7 @@ describe('compareResults', () => {
   });
 
   it('fails a reference row the candidate never ran', () => {
-    const rows = compareResults(ref, [
+    const rows = compareTestResults(ref, [
       {name: 'a', passed: true, durationMs: 1},
     ]);
     const byName = new Map(rows.map(r => [r.name, r]));
@@ -221,7 +221,7 @@ describe('compareResults', () => {
   });
 
   it('reports "reference failed, candidate passed" when candidate improves on reference', () => {
-    const rows = compareResults(
+    const rows = compareTestResults(
       [{name: 'x', passed: false, durationMs: 1}],
       [{name: 'x', passed: true, durationMs: 1}],
     );
@@ -230,7 +230,7 @@ describe('compareResults', () => {
   });
 
   it('surfaces candidate-only cases as failures', () => {
-    const rows = compareResults(ref, [
+    const rows = compareTestResults(ref, [
       {name: 'a', passed: true, durationMs: 1},
       {name: 'extra', passed: true, durationMs: 1},
     ]);

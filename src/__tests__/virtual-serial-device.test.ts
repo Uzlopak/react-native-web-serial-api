@@ -1,15 +1,19 @@
 /**
- * Unit tests for VirtualSerialTransport surface that the Serial polyfill never
+ * Unit tests for InMemorySerialTransport surface that the Serial polyfill never
  * exercises directly: the full SerialTransport method set, error injection, and
- * the VirtualSerialDevice handle helpers.
+ * the VirtualSimulatedDevice handle helpers.
  */
 import {afterEach, describe, expect, it, jest} from '@jest/globals';
-import {EchoDevice, SerialDevice, VirtualSerialTransport} from '../testing';
+import {
+  InMemorySerialTransport,
+  LoopbackDevice,
+  SimulatedDevice,
+} from '../testing';
 
 function opened() {
-  const transport = new VirtualSerialTransport();
+  const transport = new InMemorySerialTransport();
   const device = transport.addDevice(
-    new EchoDevice({
+    new LoopbackDevice({
       usbVendorId: 0x0403,
       usbProductId: 0x6001,
       serialNumber: 'SN-1',
@@ -23,7 +27,7 @@ afterEach(() => {
   jest.restoreAllMocks();
 });
 
-describe('VirtualSerialTransport: SerialTransport methods', () => {
+describe('InMemorySerialTransport: SerialTransport methods', () => {
   it('control signals, flow control, parameters, serial, buffers', async () => {
     const {transport, device, id, p} = opened();
     await transport.open(id, p, {baudRate: 9600});
@@ -71,8 +75,8 @@ describe('VirtualSerialTransport: SerialTransport methods', () => {
   });
 
   it('requestPermission grants for a known device and is false otherwise', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(), {
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(), {
       hasPermission: false,
     });
     expect(device.hasPermission).toBe(false);
@@ -82,22 +86,24 @@ describe('VirtualSerialTransport: SerialTransport methods', () => {
   });
 
   it('showPortPicker honours a predicate + filters', async () => {
-    const transport = new VirtualSerialTransport();
-    transport.addDevice(new EchoDevice({usbVendorId: 1, usbProductId: 1}));
-    transport.addDevice(new EchoDevice({usbVendorId: 2, usbProductId: 2}));
+    const transport = new InMemorySerialTransport();
+    transport.addDevice(new LoopbackDevice({usbVendorId: 1, usbProductId: 1}));
+    transport.addDevice(new LoopbackDevice({usbVendorId: 2, usbProductId: 2}));
     transport.selectNextPort(d => d.usbVendorId === 2);
     const picked = await transport.showPortPicker([{usbVendorId: 2}]);
     expect(picked.usbVendorId).toBe(2);
   });
 
   it('can pre-register devices via constructor options', async () => {
-    const transport = new VirtualSerialTransport({devices: [new EchoDevice()]});
+    const transport = new InMemorySerialTransport({
+      devices: [new LoopbackDevice()],
+    });
     const ports = await transport.findAllDrivers();
     expect(ports).toHaveLength(1);
   });
 });
 
-describe('VirtualSerialTransport: error injection (failNext)', () => {
+describe('InMemorySerialTransport: error injection (failNext)', () => {
   it('rejects the next call to each failable op', async () => {
     const {transport, device, id, p} = opened();
 
@@ -120,10 +126,12 @@ describe('VirtualSerialTransport: error injection (failNext)', () => {
   });
 });
 
-describe('VirtualSerialTransport: device handle', () => {
+describe('InMemorySerialTransport: device handle', () => {
   it('removeDevice detaches and drops the device', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(), {hasPermission: true});
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(), {
+      hasPermission: true,
+    });
     device.setInputSignals({ri: true});
     expect(await transport.getRI(device.deviceId, device.portNumber)).toBe(
       true,
@@ -137,14 +145,14 @@ describe('VirtualSerialTransport: device handle', () => {
   it('a throwing device hook is isolated from the transport', async () => {
     jest.spyOn(console, 'error').mockImplementation(() => {});
 
-    class Boom extends SerialDevice {
+    class Boom extends SimulatedDevice {
       readonly usbVendorId = 1;
       readonly usbProductId = 1;
       onData(): void {
         throw new Error('boom');
       }
     }
-    const transport = new VirtualSerialTransport();
+    const transport = new InMemorySerialTransport();
     const device = transport.addDevice(new Boom(), {hasPermission: true});
     const {deviceId: id, portNumber: p} = device;
     await transport.open(id, p, {baudRate: 9600});
@@ -154,7 +162,7 @@ describe('VirtualSerialTransport: device handle', () => {
 
   it('exposes deviceId/portNumber/openOptions to the device', async () => {
     const seen: Array<number | null> = [];
-    class Reporter extends SerialDevice {
+    class Reporter extends SimulatedDevice {
       readonly usbVendorId = 7;
       readonly usbProductId = 7;
       onOpen(): void {
@@ -165,14 +173,14 @@ describe('VirtualSerialTransport: device handle', () => {
         );
       }
     }
-    const transport = new VirtualSerialTransport();
+    const transport = new InMemorySerialTransport();
     const device = transport.addDevice(new Reporter(), {hasPermission: true});
     await transport.open(device.deviceId, device.portNumber, {baudRate: 4800});
     expect(seen).toEqual([device.deviceId, device.portNumber, 4800]);
   });
 
   it('maps device-provided input signals through the host bridge', async () => {
-    class SignalsOnOpen extends SerialDevice {
+    class SignalsOnOpen extends SimulatedDevice {
       readonly usbVendorId = 9;
       readonly usbProductId = 9;
       onOpen(): void {
@@ -185,7 +193,7 @@ describe('VirtualSerialTransport: device handle', () => {
       }
     }
 
-    const transport = new VirtualSerialTransport();
+    const transport = new InMemorySerialTransport();
     const device = transport.addDevice(new SignalsOnOpen(), {
       hasPermission: true,
     });
@@ -207,7 +215,7 @@ describe('VirtualSerialTransport: device handle', () => {
   });
 
   it('maps partial input signals without touching omitted fields', async () => {
-    class PartialSignals extends SerialDevice {
+    class PartialSignals extends SimulatedDevice {
       readonly usbVendorId = 11;
       readonly usbProductId = 11;
       onOpen(): void {
@@ -215,7 +223,7 @@ describe('VirtualSerialTransport: device handle', () => {
       }
     }
 
-    const transport = new VirtualSerialTransport();
+    const transport = new InMemorySerialTransport();
     const device = transport.addDevice(new PartialSignals(), {
       hasPermission: true,
     });
@@ -228,7 +236,7 @@ describe('VirtualSerialTransport: device handle', () => {
   });
 
   it('maps non-CTS input signals through host bridge', async () => {
-    class RingOnlySignals extends SerialDevice {
+    class RingOnlySignals extends SimulatedDevice {
       readonly usbVendorId = 12;
       readonly usbProductId = 12;
       onOpen(): void {
@@ -236,7 +244,7 @@ describe('VirtualSerialTransport: device handle', () => {
       }
     }
 
-    const transport = new VirtualSerialTransport();
+    const transport = new InMemorySerialTransport();
     const device = transport.addDevice(new RingOnlySignals(), {
       hasPermission: true,
     });
@@ -250,7 +258,7 @@ describe('VirtualSerialTransport: device handle', () => {
   it('isolates an asynchronously rejected device hook', async () => {
     jest.spyOn(console, 'error').mockImplementation(() => {});
 
-    class AsyncBoom extends SerialDevice {
+    class AsyncBoom extends SimulatedDevice {
       readonly usbVendorId = 10;
       readonly usbProductId = 10;
       onData(): Promise<void> {
@@ -258,7 +266,7 @@ describe('VirtualSerialTransport: device handle', () => {
       }
     }
 
-    const transport = new VirtualSerialTransport();
+    const transport = new InMemorySerialTransport();
     const device = transport.addDevice(new AsyncBoom(), {hasPermission: true});
     await transport.open(device.deviceId, device.portNumber, {baudRate: 9600});
 
@@ -271,11 +279,11 @@ describe('VirtualSerialTransport: device handle', () => {
   });
 });
 
-describe('VirtualSerialTransport: picker, timing and subscriptions', () => {
+describe('InMemorySerialTransport: picker, timing and subscriptions', () => {
   it('rejects picker when filters exclude all candidates', async () => {
-    const transport = new VirtualSerialTransport();
+    const transport = new InMemorySerialTransport();
     transport.addDevice(
-      new EchoDevice({usbVendorId: 0x1234, usbProductId: 0x0001}),
+      new LoopbackDevice({usbVendorId: 0x1234, usbProductId: 0x0001}),
     );
 
     await expect(
@@ -284,8 +292,10 @@ describe('VirtualSerialTransport: picker, timing and subscriptions', () => {
   });
 
   it('uses delayed resolve/reject when latencyMs is configured', async () => {
-    const transport = new VirtualSerialTransport({latencyMs: 2});
-    const device = transport.addDevice(new EchoDevice(), {hasPermission: true});
+    const transport = new InMemorySerialTransport({latencyMs: 2});
+    const device = transport.addDevice(new LoopbackDevice(), {
+      hasPermission: true,
+    });
 
     const drivers = await transport.findAllDrivers();
     expect(drivers).toHaveLength(1);
@@ -309,8 +319,8 @@ describe('VirtualSerialTransport: picker, timing and subscriptions', () => {
   });
 
   it('does not auto-grant permission when configured off', async () => {
-    const transport = new VirtualSerialTransport({autoGrantPermission: false});
-    const device = transport.addDevice(new EchoDevice(), {
+    const transport = new InMemorySerialTransport({autoGrantPermission: false});
+    const device = transport.addDevice(new LoopbackDevice(), {
       hasPermission: false,
     });
 
@@ -319,8 +329,10 @@ describe('VirtualSerialTransport: picker, timing and subscriptions', () => {
   });
 
   it('stops invoking removed connect/disconnect listeners', () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(), {hasPermission: true});
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(), {
+      hasPermission: true,
+    });
     const onConnect = jest.fn();
     const onDisconnect = jest.fn();
 
@@ -351,7 +363,7 @@ describe('VirtualSerialTransport: picker, timing and subscriptions', () => {
   });
 
   it('handles unknown device ids with safe defaults', async () => {
-    const transport = new VirtualSerialTransport();
+    const transport = new InMemorySerialTransport();
     await expect(transport.open(999, 0, {baudRate: 9600})).rejects.toThrow(
       'Device not found',
     );
@@ -378,21 +390,23 @@ describe('VirtualSerialTransport: picker, timing and subscriptions', () => {
   });
 
   it('removing a detached or foreign device is a no-op', async () => {
-    const t1 = new VirtualSerialTransport();
-    const d1 = t1.addDevice(new EchoDevice(), {hasPermission: true});
+    const t1 = new InMemorySerialTransport();
+    const d1 = t1.addDevice(new LoopbackDevice(), {hasPermission: true});
     d1.detach();
     t1.removeDevice(d1);
     expect(t1.devices).toHaveLength(0);
 
-    const t2 = new VirtualSerialTransport();
-    const foreign = t2.addDevice(new EchoDevice(), {hasPermission: true});
+    const t2 = new InMemorySerialTransport();
+    const foreign = t2.addDevice(new LoopbackDevice(), {hasPermission: true});
     t1.removeDevice(foreign);
     expect(t1.devices).toHaveLength(0);
   });
 
   it('loseDevice on a closed device skips error emission', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(), {hasPermission: true});
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(), {
+      hasPermission: true,
+    });
     const onError = jest.fn();
     transport.onError(onError);
 
@@ -401,8 +415,8 @@ describe('VirtualSerialTransport: picker, timing and subscriptions', () => {
   });
 
   it('setDTR does not loop back when loopbackSignals is disabled', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(), {
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(), {
       hasPermission: true,
       loopbackSignals: false,
     });
@@ -416,8 +430,10 @@ describe('VirtualSerialTransport: picker, timing and subscriptions', () => {
   });
 
   it('rejects picker when selected target is no longer a candidate', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(), {hasPermission: true});
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(), {
+      hasPermission: true,
+    });
     device.detach();
     transport.selectNextPort(device);
 
@@ -427,8 +443,10 @@ describe('VirtualSerialTransport: picker, timing and subscriptions', () => {
   });
 
   it('accepts picker when selected target is still a candidate', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(), {hasPermission: true});
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(), {
+      hasPermission: true,
+    });
 
     transport.selectNextPort(device);
     await expect(transport.showPortPicker([])).resolves.toMatchObject({
@@ -439,8 +457,8 @@ describe('VirtualSerialTransport: picker, timing and subscriptions', () => {
   });
 
   it('uses RTS/CTS threshold when hardware flow control is enabled', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(), {
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(), {
       hasPermission: true,
       flowControlThreshold: 3,
     });
@@ -455,10 +473,12 @@ describe('VirtualSerialTransport: picker, timing and subscriptions', () => {
   });
 });
 
-describe('VirtualSerialTransport: delivery and helper methods', () => {
+describe('InMemorySerialTransport: delivery and helper methods', () => {
   it('delivers push()/emitError() via microtasks and applies byte masking', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(), {hasPermission: true});
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(), {
+      hasPermission: true,
+    });
     const {deviceId: id, portNumber: p} = device;
     const seenData: number[][] = [];
     const seenErrors: Array<{message: string; name?: string}> = [];
@@ -484,8 +504,10 @@ describe('VirtualSerialTransport: delivery and helper methods', () => {
   });
 
   it('enforces overrunAfter limit and drops subsequent bytes after overflow', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(), {hasPermission: true});
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(), {
+      hasPermission: true,
+    });
     const {deviceId: id, portNumber: p} = device;
     const seenData: number[][] = [];
     const seenErrors: string[] = [];
@@ -512,8 +534,10 @@ describe('VirtualSerialTransport: delivery and helper methods', () => {
   });
 
   it('emits only overrun error when remaining capacity is zero', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(), {hasPermission: true});
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(), {
+      hasPermission: true,
+    });
     const {deviceId: id, portNumber: p} = device;
     const seenData: number[][] = [];
     const seenErrors: string[] = [];
@@ -537,8 +561,10 @@ describe('VirtualSerialTransport: delivery and helper methods', () => {
   });
 
   it('includes RI when control lines are asserted directly on input', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(), {hasPermission: true});
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(), {
+      hasPermission: true,
+    });
     const {deviceId: id, portNumber: p} = device;
 
     device.setInputSignals({ri: true});
@@ -548,8 +574,10 @@ describe('VirtualSerialTransport: delivery and helper methods', () => {
   });
 
   it('schedules onData via timeout when latency is enabled', async () => {
-    const transport = new VirtualSerialTransport({latencyMs: 1});
-    const device = transport.addDevice(new EchoDevice(), {hasPermission: true});
+    const transport = new InMemorySerialTransport({latencyMs: 1});
+    const device = transport.addDevice(new LoopbackDevice(), {
+      hasPermission: true,
+    });
     const {deviceId: id, portNumber: p} = device;
     const seen: number[][] = [];
 
@@ -566,8 +594,10 @@ describe('VirtualSerialTransport: delivery and helper methods', () => {
   });
 
   it('splits incoming data into chunked onData events', async () => {
-    const transport = new VirtualSerialTransport({chunkSize: 2});
-    const device = transport.addDevice(new EchoDevice(), {hasPermission: true});
+    const transport = new InMemorySerialTransport({chunkSize: 2});
+    const device = transport.addDevice(new LoopbackDevice(), {
+      hasPermission: true,
+    });
     const {deviceId: id, portNumber: p} = device;
     const seen: number[][] = [];
 
@@ -583,8 +613,8 @@ describe('VirtualSerialTransport: delivery and helper methods', () => {
     expect(seen).toEqual([[1, 2], [3, 4], [5]]);
   });
 
-  it('routes SerialDevice send/raiseError through the host bridge', async () => {
-    class BridgeDevice extends SerialDevice {
+  it('routes SimulatedDevice send/raiseError through the host bridge', async () => {
+    class BridgeDevice extends SimulatedDevice {
       readonly usbVendorId = 0x20;
       readonly usbProductId = 0x30;
       onData(): void {
@@ -593,7 +623,7 @@ describe('VirtualSerialTransport: delivery and helper methods', () => {
       }
     }
 
-    const transport = new VirtualSerialTransport();
+    const transport = new InMemorySerialTransport();
     const device = transport.addDevice(new BridgeDevice(), {
       hasPermission: true,
     });
@@ -618,8 +648,10 @@ describe('VirtualSerialTransport: delivery and helper methods', () => {
   });
 
   it('loseDevice emits disconnect and closes read/open state', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(), {hasPermission: true});
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(), {
+      hasPermission: true,
+    });
     const {deviceId: id, portNumber: p} = device;
     const disconnects: number[] = [];
 
@@ -637,8 +669,10 @@ describe('VirtualSerialTransport: delivery and helper methods', () => {
   });
 
   it('tracks delivered byte count when overrun limit is not exceeded', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(), {hasPermission: true});
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(), {
+      hasPermission: true,
+    });
     const {deviceId: id, portNumber: p} = device;
     const seenData: number[][] = [];
 
@@ -659,7 +693,7 @@ describe('VirtualSerialTransport: delivery and helper methods', () => {
   });
 
   it('exposes host isOpen getter to bound devices', async () => {
-    class BindProbe extends SerialDevice {
+    class BindProbe extends SimulatedDevice {
       readonly usbVendorId = 0x41;
       readonly usbProductId = 0x42;
       hostRef?: {isOpen: boolean};
@@ -682,7 +716,7 @@ describe('VirtualSerialTransport: delivery and helper methods', () => {
       }
     }
 
-    const transport = new VirtualSerialTransport();
+    const transport = new InMemorySerialTransport();
     const probe = new BindProbe();
     const device = transport.addDevice(probe, {hasPermission: true});
 

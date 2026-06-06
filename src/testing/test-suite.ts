@@ -2,12 +2,12 @@
  * A runtime-agnostic suite runner for serial device tests. Write a set of
  * `SerialTest`s once and run them anywhere a {@link SerialPort} exists:
  *
- *   - in Jest against a {@link VirtualSerialDevice} simulator (in-memory),
+ *   - in Jest against a {@link DeviceHandle} simulator (in-memory),
  *   - on a device / emulator over a real or WebSocket-backed port, and
- *   - against BOTH, then {@link compareResults} to prove the device matches
+ *   - against BOTH, then {@link compareTestResults} to prove the device matches
  *     the simulator case-for-case.
  *
- * Each test receives an opened, host-side {@link SerialTestHarness}; by default one
+ * Each test receives an opened, host-side {@link SerialClient}; by default one
  * client is shared across the whole suite (open once, close at the end), which
  * matches how a request/response protocol session behaves. Pass `shared: false`
  * to open and close a fresh client per test. The runner never throws — it
@@ -15,14 +15,14 @@
  * on-device Self-Test screen.
  *
  * @example One suite, two transports, compared
- * const sim = await runSerialTests(myTests, await virtualPort());
- * const dev = await runSerialTests(myTests, realPort);
- * const rows = compareResults(sim, dev); // a row passes when both agree
+ * const sim = await runTestSuite(myTests, await virtualPort());
+ * const dev = await runTestSuite(myTests, realPort);
+ * const rows = compareTestResults(sim, dev); // a row passes when both agree
  */
 
 import type {SerialOptions, SerialPort} from '../WebSerial';
 import {errorMessage} from './harness';
-import {SerialTestHarness} from './serial-test-harness';
+import {SerialClient} from './serial-client';
 
 export type SerialTestResult = {
   name: string;
@@ -32,8 +32,8 @@ export type SerialTestResult = {
 };
 
 /** One test case. `run` receives an already-opened client (typically per the
- * suite's {@link SerialTestClient}; `SerialTestHarness` by default). */
-export type SerialTest<C = SerialTestHarness> = {
+ * suite's {@link TestClient}; `SerialClient` by default). */
+export type SerialTest<C = SerialClient> = {
   name: string;
   run(client: C): Promise<void>;
 };
@@ -49,30 +49,28 @@ export type SerialTestProgress = {
 /**
  * How to build (and tear down) the per-suite client from a port. Provide this to
  * run a higher-level protocol client (e.g. an HCI / NMEA framer built on a
- * {@link SerialTestHarness}) instead of the raw client. `connect` must also open the
- * port; `disconnect` must release it (a `SerialTestHarness.close()` does both).
+ * {@link SerialClient}) instead of the raw client. `connect` must also open the
+ * port; `disconnect` must release it (a `SerialClient.close()` does both).
  */
-export type SerialTestClient<C> = {
+export type TestClient<C> = {
   connect(port: SerialPort): Promise<C>;
   disconnect(client: C): Promise<void>;
 };
 
-export type RunSerialTestsOptions<C = SerialTestHarness> = {
+export type RunTestSuiteOptions<C = SerialClient> = {
   /** `SerialOptions` for the default client's `open()`. Default {baudRate: 115200}. */
   open?: SerialOptions;
   /** Open/close a fresh client per test instead of sharing one. Default false. */
   shared?: boolean;
-  /** Build a protocol client over the port (defaults to an opened SerialTestHarness). */
-  client?: SerialTestClient<C>;
+  /** Build a protocol client over the port (defaults to an opened SerialClient). */
+  client?: TestClient<C>;
   progress?: SerialTestProgress;
 };
 
-function defaultClientFactory(
-  open?: SerialOptions,
-): SerialTestClient<SerialTestHarness> {
+function defaultClientFactory(open?: SerialOptions): TestClient<SerialClient> {
   return {
     async connect(port) {
-      const client = new SerialTestHarness(port);
+      const client = new SerialClient(port);
       await client.open(open);
       return client;
     },
@@ -85,13 +83,13 @@ function defaultClientFactory(
  * case. With the default (shared) client the port is opened once and closed at
  * the end; with `shared: false` each test gets a fresh open/close. Never throws.
  */
-export async function runSerialTests<C = SerialTestHarness>(
+export async function runTestSuite<C = SerialClient>(
   tests: SerialTest<C>[],
   port: SerialPort,
-  options: RunSerialTestsOptions<C> = {},
+  options: RunTestSuiteOptions<C> = {},
 ): Promise<SerialTestResult[]> {
   const factory = (options.client ??
-    defaultClientFactory(options.open)) as SerialTestClient<C>;
+    defaultClientFactory(options.open)) as TestClient<C>;
   const shared = options.shared ?? true;
   const progress = options.progress;
   const results: SerialTestResult[] = [];
@@ -154,7 +152,7 @@ export async function runSerialTests<C = SerialTestHarness>(
  * the `reference` rather than judged on its own. Cases the candidate produced
  * that the reference never ran are surfaced as failing `candidate: …` rows.
  */
-export function compareResults(
+export function compareTestResults(
   reference: SerialTestResult[],
   candidate: SerialTestResult[],
 ): SerialTestResult[] {

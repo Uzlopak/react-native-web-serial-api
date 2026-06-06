@@ -1,9 +1,9 @@
 /**
- * `exposeSerialDevice` — run a {@link SerialDevice} simulator behind a WebSocket
+ * `exposeSimulatedDevice` — run a {@link SimulatedDevice} simulator behind a WebSocket
  * server so a real app (on a device/emulator) can connect to it with
  * `new Serial(new WebSocketSerialTransport(url))` and drive the *same* simulated
  * peripheral your Jest tests drive. The test process keeps the
- * {@link VirtualSerialDevice} handle, so it can inject frames / move the GPS and
+ * {@link DeviceHandle} handle, so it can inject frames / move the GPS and
  * `await whenOpened()` for the app to connect — turning an in-memory device
  * suite into an on-device E2E without changing the device code.
  *
@@ -14,13 +14,13 @@
  *
  * @example
  * import {WebSocketServer} from 'ws';
- * const ex = exposeSerialDevice(new WMBusGateway('iU891A-XL'), {
+ * const ex = exposeSimulatedDevice(new WMBusGateway('iU891A-XL'), {
  *   port: 8090,
  *   WebSocketServer,
  * });
  * // …app connects to ex.url…
  * await ex.whenOpened();
- * ex.serialDevice.addMeter(meter);
+ * ex.simulatedDevice.addMeter(meter);
  * meter.sendTelegram(); // the app receives the 0x20 telegram event
  * await ex.close();
  */
@@ -28,15 +28,18 @@
 import {
   attachBridge,
   portInfoFromDevice,
-  serialDeviceToSerialLike,
+  SimulatedDeviceToSerialLike,
   type WsLike,
 } from '../websocket';
-import type {SerialDevice, SerialDeviceOpenOptions} from './serial-device';
-import type {VirtualSerialDeviceOptions} from './virtual-serial-device';
+import type {DeviceOptions} from './in-memory-serial-transport';
 import {
-  type VirtualSerialDevice,
-  VirtualSerialTransport,
-} from './virtual-serial-device';
+  type DeviceHandle,
+  InMemorySerialTransport,
+} from './in-memory-serial-transport';
+import type {
+  SimulatedDevice,
+  SimulatedDeviceOpenOptions,
+} from './simulated-device';
 
 /** The `ws` WebSocketServer surface this helper uses. */
 export type WebSocketServerLike = {
@@ -50,7 +53,7 @@ export type WebSocketServerCtor = new (options: {
   host?: string;
 }) => WebSocketServerLike;
 
-export type ExposeSerialDeviceOptions = {
+export type ExposeSimulatedDeviceOptions = {
   /** TCP port for the WebSocket server. */
   port: number;
   /** Listen address. Defaults to `localhost`. Use `0.0.0.0` for an emulator. */
@@ -62,19 +65,19 @@ export type ExposeSerialDeviceOptions = {
   /** Diagnostics logger. */
   log?: (message: string) => void;
   /** Transport-side device options (hasPermission defaults to true). */
-  device?: VirtualSerialDeviceOptions;
+  device?: DeviceOptions;
 };
 
-export type ExposedSerialDevice<D extends SerialDevice = SerialDevice> = {
+export type ExposedDevice<D extends SimulatedDevice = SimulatedDevice> = {
   /** The URL the app connects to, e.g. `ws://localhost:8090`. */
   url: string;
-  transport: VirtualSerialTransport;
+  transport: InMemorySerialTransport;
   /** The transport-side handle: push/emitError/whenOpened/whenClosed/… */
-  device: VirtualSerialDevice;
+  device: DeviceHandle;
   /** The concrete device simulator, typed (drive it from the test). */
-  serialDevice: D;
+  simulatedDevice: D;
   /** Resolve when the app opens the port (now if already open). */
-  whenOpened(): Promise<SerialDeviceOpenOptions>;
+  whenOpened(): Promise<SimulatedDeviceOpenOptions>;
   /** Resolve when the app closes the port (now if not open). */
   whenClosed(): Promise<void>;
   /** Stop the WebSocket server. */
@@ -95,7 +98,7 @@ function loadWebSocketServer(): WebSocketServerCtor {
   /* istanbul ignore next — only reachable in non-Node bundled environments */
   if (!nodeRequire) {
     throw new Error(
-      "exposeSerialDevice could not load 'ws'. Pass options.WebSocketServer, " +
+      "exposeSimulatedDevice could not load 'ws'. Pass options.WebSocketServer, " +
         'or run it in a Node process with the optional `ws` package installed.',
     );
   }
@@ -110,12 +113,12 @@ function loadWebSocketServer(): WebSocketServerCtor {
   return Ctor;
 }
 
-export function exposeSerialDevice<D extends SerialDevice>(
-  serialDevice: D,
-  options: ExposeSerialDeviceOptions,
-): ExposedSerialDevice<D> {
-  const transport = new VirtualSerialTransport();
-  const device = transport.addDevice(serialDevice, {
+export function exposeSimulatedDevice<D extends SimulatedDevice>(
+  simulatedDevice: D,
+  options: ExposeSimulatedDeviceOptions,
+): ExposedDevice<D> {
+  const transport = new InMemorySerialTransport();
+  const device = transport.addDevice(simulatedDevice, {
     hasPermission: true,
     ...options.device,
   });
@@ -123,7 +126,7 @@ export function exposeSerialDevice<D extends SerialDevice>(
   const Ctor = options.WebSocketServer ?? loadWebSocketServer();
   const server = new Ctor({port: options.port, host: options.host});
   server.on('connection', socket => {
-    const serial = serialDeviceToSerialLike(transport, device);
+    const serial = SimulatedDeviceToSerialLike(transport, device);
     attachBridge(serial, socket, {
       portInfo: portInfoFromDevice(device),
       readingByDefault: options.readingByDefault,
@@ -136,7 +139,7 @@ export function exposeSerialDevice<D extends SerialDevice>(
     url: `ws://${host}:${options.port}`,
     transport,
     device,
-    serialDevice,
+    simulatedDevice,
     whenOpened: () => device.whenOpened(),
     whenClosed: () => device.whenClosed(),
     close: () => new Promise<void>(resolve => server.close(() => resolve())),

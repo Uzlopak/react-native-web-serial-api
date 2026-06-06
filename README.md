@@ -201,22 +201,22 @@ The hardware layer sits behind a single injectable `SerialTransport` interface, 
 
 ```ts
 import {Serial} from 'react-native-web-serial-api';
-import {VirtualSerialTransport, EchoDevice} from 'react-native-web-serial-api/testing';
+import {InMemorySerialTransport, LoopbackDevice} from 'react-native-web-serial-api/testing';
 
-const transport = new VirtualSerialTransport();
-transport.addDevice(new EchoDevice(), {hasPermission: true});
+const transport = new InMemorySerialTransport();
+transport.addDevice(new LoopbackDevice(), {hasPermission: true});
 const serial = new Serial(transport); // no native module, no hardware
 ```
 
 ### Writing a virtual serial device
 
-You author a peripheral by extending **`SerialDevice`** and overriding the lifecycle hooks (`onOpen`, `onData`, `onClose`); `this.send(...)` streams bytes back to the host. Registering it with `transport.addDevice()` hands you back a **`VirtualSerialDevice`** — the handle a test or demo uses to drive it, like a human plugging in cables.
+You author a peripheral by extending **`SimulatedDevice`** and overriding the lifecycle hooks (`onOpen`, `onData`, `onClose`); `this.send(...)` streams bytes back to the host. Registering it with `transport.addDevice()` hands you back a **`DeviceHandle`** — the handle a test or demo uses to drive it, like a human plugging in cables.
 
 ```ts
-import {SerialDevice} from 'react-native-web-serial-api/testing';
+import {SimulatedDevice} from 'react-native-web-serial-api/testing';
 
 // The peripheral's "firmware": greet on open, answer "ID?", stream readings.
-class Thermometer extends SerialDevice {
+class Thermometer extends SimulatedDevice {
   readonly usbVendorId = 0x10c4; // CP210x
   readonly usbProductId = 0xea60;
   #timer?: ReturnType<typeof setInterval>;
@@ -234,10 +234,10 @@ class Thermometer extends SerialDevice {
 }
 ```
 
-`SerialDevice` is what *you* write (the device behaviour); `VirtualSerialDevice` is the transport-side handle `addDevice` returns, so you can drive and inspect the device without putting any bytes on the wire:
+`SimulatedDevice` is what *you* write (the device behaviour); `DeviceHandle` is the transport-side handle `addDevice` returns, so you can drive and inspect the device without putting any bytes on the wire:
 
 ```ts
-const transport = new VirtualSerialTransport();
+const transport = new InMemorySerialTransport();
 const device = transport.addDevice(new Thermometer(), {hasPermission: true});
 
 device.push([0x48, 0x69]); // device emits bytes to the host, unprompted
@@ -253,7 +253,7 @@ npm test               # unit + WPT conformance suites
 npm run test:coverage  # coverage report (HTML in coverage/lcov-report)
 ```
 
-See **[TESTING.md](TESTING.md)** for the full guide: authoring a `SerialDevice`, `SerialTestHarness` (fluent test driver), `mountSerialDevice` (one-call fixture with `whenOpened`/`whenClosed`), fault injection, `runSerialTests` + `compareResults` (one suite, two runtimes), `exposeSerialDevice` (WebSocket E2E against a real app), the conformance/WPT suites, and coverage.
+See **[TESTING.md](TESTING.md)** for the full guide: authoring a `SimulatedDevice`, `SerialClient` (fluent test driver), `createDeviceFixture` (one-call fixture with `whenOpened`/`whenClosed`), fault injection, `runTestSuite` + `compareTestResults` (one suite, two runtimes), `exposeSerialDevice` (WebSocket E2E against a real app), the conformance/WPT suites, and coverage.
 
 ## Remote serial over WebSocket
 

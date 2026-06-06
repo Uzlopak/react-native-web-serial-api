@@ -3,7 +3,7 @@
  *
  * Uses the React Native preset because the transport seam (src/UsbSerial.ts)
  * imports `react-native`. The tests themselves never touch real native modules
- * — they inject a VirtualSerialTransport — but the import graph still needs the
+ * — they inject a InMemorySerialTransport — but the import graph still needs the
  * RN mocks the preset provides.
  */
 module.exports = {

@@ -5,7 +5,7 @@
  * classes depend on to talk to "the device". The production implementation
  * (`UsbSerialModule`, backed by the `NativeUsbSerial` TurboModule — see
  * {@link ./UsbSerial}) and the in-memory test/dev double
- * (`VirtualSerialTransport` — see {@link ./testing/virtual-serial}) both
+ * (`InMemorySerialTransport` — see {@link ./testing/in-memory-serial-transport}) both
  * implement it.
  *
  * This module is intentionally free of any `react-native` import. That is what
@@ -115,7 +115,7 @@ export type Subscription = {remove: () => void};
  * The contract every serial transport must satisfy. It mirrors the JS-friendly
  * surface of `UsbSerialModule` exactly, so `UsbSerialModule implements
  * SerialTransport` is a faithful 1:1 and any conforming double (e.g.
- * `VirtualSerialTransport`) is a drop-in replacement.
+ * `InMemorySerialTransport`) is a drop-in replacement.
  *
  * Ports are addressed by the pair `(deviceId, portNumber)`. Inbound bytes,
  * read errors and device attach/detach arrive through the `on*` subscriptions.

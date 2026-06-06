@@ -1,19 +1,19 @@
 /**
  * Integration tests for the NMEA GPS emulator driven through the real
- * Serial/SerialPort polyfill over a VirtualSerialTransport — plus the
+ * Serial/SerialPort polyfill over a InMemorySerialTransport — plus the
  * programmatic update() path (no serial round-trip).
  */
 import {afterEach, describe, expect, it} from '@jest/globals';
 import type {SerialPort} from 'react-native-web-serial-api';
 import {Serial} from 'react-native-web-serial-api';
-import {VirtualSerialTransport} from 'react-native-web-serial-api/testing';
+import {InMemorySerialTransport} from 'react-native-web-serial-api/testing';
 import {NmeaGpsDevice} from '../../src/devices/gps/NmeaGpsDevice';
 import {makeSatellites} from '../../src/devices/gps/nmea';
 
 const FIXED = new Date(Date.UTC(2024, 0, 2, 12, 0, 0));
 
 async function mount(device: NmeaGpsDevice): Promise<SerialPort> {
-  const transport = new VirtualSerialTransport();
+  const transport = new InMemorySerialTransport();
   transport.addDevice(device, {hasPermission: true});
   const serial = new Serial(transport);
   const [port] = await serial.getPorts();

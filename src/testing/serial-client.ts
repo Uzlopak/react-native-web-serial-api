@@ -1,26 +1,26 @@
 /**
- * A fluent request/response harness over a {@link SerialPort} — the host-side
+ * A fluent request/response client over a {@link SerialPort} — the host-side
  * driver every serial test otherwise hand-rolls (reader + writer, a pending
  * byte buffer, framed reads with timeouts). Works on ANY SerialPort: the
- * in-memory {@link VirtualSerialTransport}, a real USB device, or a
+ * in-memory {@link InMemorySerialTransport}, a real USB device, or a
  * WebSocket-backed one — so the same test runs in Jest and on a device.
  *
  * @example
- * const {client} = await mountSerialDevice(new MyDevice());
+ * const {client} = await mountDeviceFixture(new MyDevice());
  * await client.open({baudRate: 115200});
  * await client.write('PING\n');
  * expect(await client.readLine()).toBe('PONG');
  * await client.close();
  */
 import type {SerialOptions, SerialPort} from '../WebSerial';
-import {toBytes} from './serial-device';
+import {toBytes} from './simulated-device';
 
 export type ReadOptions = {
   /** Per-call timeout in ms (overrides the client default). */
   timeout?: number;
 };
 
-export type SerialTestHarnessOptions = {
+export type SerialClientOptions = {
   /** Default per-read timeout in ms. Default 2000. */
   defaultTimeoutMs?: number;
 };
@@ -36,7 +36,7 @@ function indexOfSubsequence(haystack: number[], needle: number[]): number {
   return -1;
 }
 
-export class SerialTestHarness {
+export class SerialClient {
   readonly #port: SerialPort;
   readonly #defaultTimeout: number;
 
@@ -50,7 +50,7 @@ export class SerialTestHarness {
   /** Resolvers woken whenever #pending grows or the stream ends. */
   #waiters: Array<() => void> = [];
 
-  constructor(port: SerialPort, options: SerialTestHarnessOptions = {}) {
+  constructor(port: SerialPort, options: SerialClientOptions = {}) {
     this.#port = port;
     this.#defaultTimeout = options.defaultTimeoutMs ?? 2000;
   }
@@ -90,7 +90,7 @@ export class SerialTestHarness {
       while (!this.#closed) {
         const {done, value} = await reader.read();
         if (done) break;
-        /* istanbul ignore else — VirtualSerialTransport never emits empty chunks */
+        /* istanbul ignore else — InMemorySerialTransport never emits empty chunks */
         if (value && value.length > 0) {
           for (let i = 0; i < value.length; i++) this.#pending.push(value[i]);
           this.#wake();
@@ -168,7 +168,7 @@ export class SerialTestHarness {
 
   /** Write bytes (string → char codes & 0xff). */
   async write(data: number[] | Uint8Array | string): Promise<void> {
-    if (!this.#writer) throw new Error('SerialTestHarness is not open.');
+    if (!this.#writer) throw new Error('SerialClient is not open.');
     await this.#writer.write(Uint8Array.from(toBytes(data)));
   }
 
@@ -304,10 +304,10 @@ export class SerialTestHarness {
   }
 }
 
-/** Create a {@link SerialTestHarness} for any SerialPort (virtual, real, or WS). */
-export function createSerialTestHarness(
+/** Create a {@link SerialClient} for any SerialPort (virtual, real, or WS). */
+export function createSerialClient(
   port: SerialPort,
-  options?: SerialTestHarnessOptions,
-): SerialTestHarness {
-  return new SerialTestHarness(port, options);
+  options?: SerialClientOptions,
+): SerialClient {
+  return new SerialClient(port, options);
 }

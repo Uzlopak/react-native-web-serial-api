@@ -1,13 +1,13 @@
-import {LineDevice} from 'react-native-web-serial-api/testing';
+import {LineBufferedDevice} from 'react-native-web-serial-api/testing';
 
 /**
  * A simulated CP210x temperature sensor — a worked example of authoring a whole
- * peripheral by extending SerialDevice (via LineDevice).
+ * peripheral by extending SimulatedDevice (via LineBufferedDevice).
  *
  * On open it greets and then streams a reading every second; it also answers
  * line commands ("ID?" → model name, anything else → a fresh reading).
  */
-export class SensorDevice extends LineDevice {
+export class SensorDevice extends LineBufferedDevice {
   readonly usbVendorId = 0x10c4;
   readonly usbProductId = 0xea60;
   readonly serialNumber = 'VIRT-CP210x-SENSOR';

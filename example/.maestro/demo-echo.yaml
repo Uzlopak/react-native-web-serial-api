@@ -1,5 +1,5 @@
 # End-to-end: drive the whole app against the in-app virtual device mock (no USB
-# hardware). Enables "Virtual device (demo)" (a SerialDevice-backed transport),
+# hardware). Enables "Virtual device (demo)" (a SimulatedDevice-backed transport),
 # connects to the FTDI echo device, sends a line, and asserts it round-trips.
 # Note: Maestro matches text as a *full* regex, hence the `.*` wildcards.
 #

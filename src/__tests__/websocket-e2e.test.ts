@@ -1,21 +1,21 @@
 /**
- * End-to-end proof that a device simulator exposed with `exposeSerialDevice`
+ * End-to-end proof that a device simulator exposed with `exposeSimulatedDevice`
  * over a REAL `ws` server can be driven by the REAL `WebSocketSerialTransport`
  * client — in one Node process, no emulator. This is the on-device E2E path
- * (app ⇄ ws ⇄ simulator) exercised without a device: the SAME `SerialTestHarness`
- * code and `runSerialTests` suite that run in-memory also run over the socket.
+ * (app ⇄ ws ⇄ simulator) exercised without a device: the SAME `SerialClient`
+ * code and `runTestSuite` suite that run in-memory also run over the socket.
  */
 
 import {createServer} from 'node:net';
 import {afterEach, describe, expect, it} from '@jest/globals';
 import {WebSocket, WebSocketServer} from 'ws';
 import {
-  EchoDevice,
-  type ExposedSerialDevice,
-  exposeSerialDevice,
-  runSerialTests,
+  type ExposedDevice,
+  exposeSimulatedDevice,
+  LoopbackDevice,
+  runTestSuite,
+  SerialClient,
   type SerialTest,
-  SerialTestHarness,
 } from '../testing';
 import {Serial} from '../WebSerial';
 import {
@@ -38,7 +38,7 @@ function freePort(): Promise<number> {
   });
 }
 
-let exposed: ExposedSerialDevice | null = null;
+let exposed: ExposedDevice | null = null;
 
 afterEach(async () => {
   await exposed?.close();
@@ -46,7 +46,7 @@ afterEach(async () => {
 });
 
 /** Expose `device` over a real ws server and return an opened client port. */
-async function connect(exposedDevice: ExposedSerialDevice) {
+async function connect(exposedDevice: ExposedDevice) {
   exposed = exposedDevice;
   const transport = new WebSocketSerialTransport(exposedDevice.url, {
     WebSocket: WebSocket as unknown as WebSocketCtor,
@@ -58,16 +58,16 @@ async function connect(exposedDevice: ExposedSerialDevice) {
   return port;
 }
 
-describe('exposeSerialDevice ⇄ WebSocketSerialTransport (real sockets)', () => {
+describe('exposeSimulatedDevice ⇄ WebSocketSerialTransport (real sockets)', () => {
   it('round-trips host writes and test-driven device pushes over the socket', async () => {
     const port = await freePort();
-    const ex = exposeSerialDevice(new EchoDevice(FTDI), {
+    const ex = exposeSimulatedDevice(new LoopbackDevice(FTDI), {
       port,
       WebSocketServer,
     });
     const serialPort = await connect(ex);
 
-    const client = new SerialTestHarness(serialPort);
+    const client = new SerialClient(serialPort);
     const opened = ex.whenOpened();
     await client.open({baudRate: 115200});
     await expect(opened).resolves.toMatchObject({baudRate: 115200});
@@ -83,9 +83,9 @@ describe('exposeSerialDevice ⇄ WebSocketSerialTransport (real sockets)', () =>
     await client.close();
   }, 15000);
 
-  it('runs a runSerialTests suite unchanged over the WebSocket port', async () => {
+  it('runs a runTestSuite suite unchanged over the WebSocket port', async () => {
     const port = await freePort();
-    const ex = exposeSerialDevice(new EchoDevice(FTDI), {
+    const ex = exposeSimulatedDevice(new LoopbackDevice(FTDI), {
       port,
       WebSocketServer,
     });
@@ -101,7 +101,7 @@ describe('exposeSerialDevice ⇄ WebSocketSerialTransport (real sockets)', () =>
         },
       },
     ];
-    const results = await runSerialTests(suite, serialPort, {
+    const results = await runTestSuite(suite, serialPort, {
       open: {baudRate: 115200},
     });
     expect(results.map(r => [r.name, r.passed])).toEqual([

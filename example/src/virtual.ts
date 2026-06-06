@@ -1,6 +1,6 @@
 import {
-  EchoDevice,
-  VirtualSerialTransport,
+  InMemorySerialTransport,
+  LoopbackDevice,
 } from 'react-native-web-serial-api/testing';
 import {NmeaGpsDevice} from './devices/gps/NmeaGpsDevice';
 import {SensorDevice} from './devices/SensorDevice';
@@ -12,9 +12,9 @@ import {WMBusMeter} from './devices/wmbus/WMBusMeter';
  * mode, so the entire Devices → Connect → Terminal flow works with no USB
  * hardware attached — on a device, an emulator, or in the browser.
  *
- * Every device is authored as a `SerialDevice` (the same model a consumer would
+ * Every device is authored as a `SimulatedDevice` (the same model a consumer would
  * write for their own E2E tests):
- *  - an FTDI {@link EchoDevice} that echoes everything you type (already permitted),
+ *  - an FTDI {@link LoopbackDevice} that echoes everything you type (already permitted),
  *  - a CP210x {@link SensorDevice} that streams readings + answers commands and
  *    starts un-permitted, so you can exercise the tap-to-grant flow too,
  *  - a CH340 {@link WMBusGateway} speaking the full IMST HCI protocol, hosting a
@@ -22,12 +22,12 @@ import {WMBusMeter} from './devices/wmbus/WMBusMeter';
  *  - a u-blox {@link NmeaGpsDevice} streaming NMEA 0183 sentences ($GPGGA,
  *    $GPRMC, …) for the Greenwich Royal Observatory position.
  */
-export function createDemoTransport(): VirtualSerialTransport {
+export function createDemoTransport(): InMemorySerialTransport {
   // A little latency makes streaming feel like real hardware.
-  const transport = new VirtualSerialTransport({latencyMs: 15});
+  const transport = new InMemorySerialTransport({latencyMs: 15});
 
   transport.addDevice(
-    new EchoDevice({
+    new LoopbackDevice({
       usbVendorId: 0x0403,
       usbProductId: 0x6001,
       serialNumber: 'VIRT-FTDI-ECHO',

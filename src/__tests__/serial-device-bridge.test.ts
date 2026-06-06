@@ -1,21 +1,21 @@
 /**
- * Tests for exposing an in-memory {@link SerialDevice} simulator over the
- * WebSocket bridge: the `serialDeviceToSerialLike` adapter and the
- * `exposeSerialDevice` server wrapper (driven with `ws`/socket fakes).
+ * Tests for exposing an in-memory {@link SimulatedDevice} simulator over the
+ * WebSocket bridge: the `SimulatedDeviceToSerialLike` adapter and the
+ * `exposeSimulatedDevice` server wrapper (driven with `ws`/socket fakes).
  */
 import {describe, expect, it, jest} from '@jest/globals';
 import {
-  EchoDevice,
-  exposeSerialDevice,
-  LineDevice,
-  VirtualSerialTransport,
+  exposeSimulatedDevice,
+  InMemorySerialTransport,
+  LineBufferedDevice,
+  LoopbackDevice,
   type WebSocketServerLike,
 } from '../testing';
 import type {WsLike} from '../websocket';
 import {
   attachBridge,
   portInfoFromDevice,
-  serialDeviceToSerialLike,
+  SimulatedDeviceToSerialLike,
 } from '../websocket';
 
 const FTDI = {usbVendorId: 0x0403, usbProductId: 0x6001} as const;
@@ -66,19 +66,19 @@ async function openFromApp(ws: FakeWs, baudRate = 115200): Promise<void> {
   await flush();
 }
 
-describe('serialDeviceToSerialLike', () => {
+describe('SimulatedDeviceToSerialLike', () => {
   it('pipes app writes into the device and the device reply back out', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(FTDI), {
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(FTDI), {
       hasPermission: true,
     });
     const ws = new FakeWs();
-    attachBridge(serialDeviceToSerialLike(transport, device), ws, {
+    attachBridge(SimulatedDeviceToSerialLike(transport, device), ws, {
       portInfo: portInfoFromDevice(device),
     });
 
     await openFromApp(ws);
-    ws.recvBinary([1, 2, 3, 4]); // app writes; EchoDevice echoes
+    ws.recvBinary([1, 2, 3, 4]); // app writes; LoopbackDevice echoes
     await flush();
 
     expect(ws.binary()).toHaveLength(1);
@@ -86,13 +86,13 @@ describe('serialDeviceToSerialLike', () => {
   });
 
   it('answers getPortInfo with the device identity', async () => {
-    const transport = new VirtualSerialTransport();
+    const transport = new InMemorySerialTransport();
     const device = transport.addDevice(
-      new EchoDevice({usbVendorId: 0x2341, usbProductId: 0x0043}),
+      new LoopbackDevice({usbVendorId: 0x2341, usbProductId: 0x0043}),
       {hasPermission: true, serialNumber: 'SN-9'},
     );
     const ws = new FakeWs();
-    attachBridge(serialDeviceToSerialLike(transport, device), ws, {
+    attachBridge(SimulatedDeviceToSerialLike(transport, device), ws, {
       portInfo: portInfoFromDevice(device),
     });
 
@@ -108,12 +108,12 @@ describe('serialDeviceToSerialLike', () => {
   });
 
   it('routes setSignals to the device and reflects them via getSignals', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(FTDI), {
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(FTDI), {
       hasPermission: true,
     });
     const ws = new FakeWs();
-    attachBridge(serialDeviceToSerialLike(transport, device), ws);
+    attachBridge(SimulatedDeviceToSerialLike(transport, device), ws);
     await openFromApp(ws);
 
     ws.recvCommand({
@@ -136,7 +136,7 @@ describe('serialDeviceToSerialLike', () => {
 
   it('delivers a device-driven push to the connected app', async () => {
     // A device the test drives unprompted (e.g. a sensor reading).
-    class Sensor extends LineDevice {
+    class Sensor extends LineBufferedDevice {
       readonly usbVendorId = FTDI.usbVendorId;
       readonly usbProductId = FTDI.usbProductId;
       onLine(): void {}
@@ -144,11 +144,11 @@ describe('serialDeviceToSerialLike', () => {
         this.send(text);
       }
     }
-    const transport = new VirtualSerialTransport();
+    const transport = new InMemorySerialTransport();
     const sensor = new Sensor();
     const device = transport.addDevice(sensor, {hasPermission: true});
     const ws = new FakeWs();
-    attachBridge(serialDeviceToSerialLike(transport, device), ws);
+    attachBridge(SimulatedDeviceToSerialLike(transport, device), ws);
     await openFromApp(ws);
 
     sensor.report('hi\n'); // driven by the test, not a reply to a write
@@ -160,12 +160,12 @@ describe('serialDeviceToSerialLike', () => {
   });
 
   it('ensureOpen calls setParameters (not open again) when device is already open', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(FTDI), {
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(FTDI), {
       hasPermission: true,
     });
     const ws = new FakeWs();
-    attachBridge(serialDeviceToSerialLike(transport, device), ws);
+    attachBridge(SimulatedDeviceToSerialLike(transport, device), ws);
     await openFromApp(ws); // device is now open (setLineCoding + startReading)
 
     // setBaudRate → update() → ensureOpen() → device.isOpen=true → setParameters (lines 73-74)
@@ -182,13 +182,13 @@ describe('serialDeviceToSerialLike', () => {
   });
 
   it('write error calls the bridge log callback', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(FTDI), {
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(FTDI), {
       hasPermission: true,
     });
     const ws = new FakeWs();
     const log = jest.fn();
-    attachBridge(serialDeviceToSerialLike(transport, device), ws, {log});
+    attachBridge(SimulatedDeviceToSerialLike(transport, device), ws, {log});
     await openFromApp(ws);
 
     device.failNext('write'); // makes transport.write() reject → line 94
@@ -199,12 +199,12 @@ describe('serialDeviceToSerialLike', () => {
   });
 
   it('set (setSignals) error propagates to the reply', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(FTDI), {
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(FTDI), {
       hasPermission: true,
     });
     const ws = new FakeWs();
-    attachBridge(serialDeviceToSerialLike(transport, device), ws);
+    attachBridge(SimulatedDeviceToSerialLike(transport, device), ws);
     await openFromApp(ws);
 
     device.failNext('setSignals'); // makes transport.setDTR() reject → set error cb line 107
@@ -221,12 +221,12 @@ describe('serialDeviceToSerialLike', () => {
   });
 
   it('get (getSignals) error propagates to the reply', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(FTDI), {
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(FTDI), {
       hasPermission: true,
     });
     const ws = new FakeWs();
-    attachBridge(serialDeviceToSerialLike(transport, device), ws);
+    attachBridge(SimulatedDeviceToSerialLike(transport, device), ws);
     await openFromApp(ws);
 
     // getCD uses _consumeFail('getSignals') → Promise.all rejects → get error cb line 118
@@ -239,12 +239,12 @@ describe('serialDeviceToSerialLike', () => {
   });
 
   it('update error (open fails) propagates to the reply', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(FTDI), {
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(FTDI), {
       hasPermission: true,
     });
     const ws = new FakeWs();
-    attachBridge(serialDeviceToSerialLike(transport, device), ws);
+    attachBridge(SimulatedDeviceToSerialLike(transport, device), ws);
 
     // Device is not yet open; open() will fail → ensureOpen throws → update error cb line 124
     device.failNext('open');
@@ -261,12 +261,12 @@ describe('serialDeviceToSerialLike', () => {
   });
 
   it('close error propagates to the reply', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(FTDI), {
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(FTDI), {
       hasPermission: true,
     });
     const ws = new FakeWs();
-    attachBridge(serialDeviceToSerialLike(transport, device), ws);
+    attachBridge(SimulatedDeviceToSerialLike(transport, device), ws);
     await openFromApp(ws);
 
     device.failNext('close'); // makes transport.close() reject → close error cb line 139
@@ -278,12 +278,12 @@ describe('serialDeviceToSerialLike', () => {
   });
 
   it('invokes close listeners on a successful close', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(FTDI), {
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(FTDI), {
       hasPermission: true,
     });
     const ws = new FakeWs();
-    attachBridge(serialDeviceToSerialLike(transport, device), ws);
+    attachBridge(SimulatedDeviceToSerialLike(transport, device), ws);
     await openFromApp(ws);
 
     ws.recvCommand({type: 'command', id: 3, command: 'close'});
@@ -294,12 +294,12 @@ describe('serialDeviceToSerialLike', () => {
   });
 
   it('setSignals with only rts (no dtr) skips the dtr branch', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(FTDI), {
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(FTDI), {
       hasPermission: true,
     });
     const ws = new FakeWs();
-    attachBridge(serialDeviceToSerialLike(transport, device), ws);
+    attachBridge(SimulatedDeviceToSerialLike(transport, device), ws);
     await openFromApp(ws);
 
     ws.recvCommand({
@@ -315,11 +315,11 @@ describe('serialDeviceToSerialLike', () => {
   });
 
   it('on() with an unknown event name is a no-op', () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(FTDI), {
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(FTDI), {
       hasPermission: true,
     });
-    const serial = serialDeviceToSerialLike(transport, device);
+    const serial = SimulatedDeviceToSerialLike(transport, device);
     const anySerial = serial as unknown as {
       on: (e: string, l: () => void) => void;
     };
@@ -328,11 +328,11 @@ describe('serialDeviceToSerialLike', () => {
   });
 
   it('removeListener() with an unknown event name is a no-op', () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(FTDI), {
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(FTDI), {
       hasPermission: true,
     });
-    const serial = serialDeviceToSerialLike(transport, device);
+    const serial = SimulatedDeviceToSerialLike(transport, device);
     const anySerial = serial as unknown as {
       on: (e: string, l: () => void) => void;
       removeListener: (e: string, l: () => void) => void;
@@ -346,16 +346,18 @@ describe('serialDeviceToSerialLike', () => {
   });
 
   it('ignores data events from a different device on the same transport', async () => {
-    const transport = new VirtualSerialTransport();
-    const d1 = transport.addDevice(new EchoDevice(FTDI), {hasPermission: true});
+    const transport = new InMemorySerialTransport();
+    const d1 = transport.addDevice(new LoopbackDevice(FTDI), {
+      hasPermission: true,
+    });
     const d2 = transport.addDevice(
-      new EchoDevice({usbVendorId: 0x10c4, usbProductId: 0xea60}),
+      new LoopbackDevice({usbVendorId: 0x10c4, usbProductId: 0xea60}),
       {hasPermission: true},
     );
     const ws1 = new FakeWs();
     const ws2 = new FakeWs();
-    attachBridge(serialDeviceToSerialLike(transport, d1), ws1);
-    attachBridge(serialDeviceToSerialLike(transport, d2), ws2);
+    attachBridge(SimulatedDeviceToSerialLike(transport, d1), ws1);
+    attachBridge(SimulatedDeviceToSerialLike(transport, d2), ws2);
     await openFromApp(ws1); // open d1
     await openFromApp(ws2); // open d2 (so push() will fire a DataEvent)
 
@@ -367,14 +369,16 @@ describe('serialDeviceToSerialLike', () => {
   });
 
   it('ignores error events from a different device on the same transport', async () => {
-    const transport = new VirtualSerialTransport();
-    const d1 = transport.addDevice(new EchoDevice(FTDI), {hasPermission: true});
+    const transport = new InMemorySerialTransport();
+    const d1 = transport.addDevice(new LoopbackDevice(FTDI), {
+      hasPermission: true,
+    });
     const d2 = transport.addDevice(
-      new EchoDevice({usbVendorId: 0x10c4, usbProductId: 0xea60}),
+      new LoopbackDevice({usbVendorId: 0x10c4, usbProductId: 0xea60}),
       {hasPermission: true},
     );
     const ws = new FakeWs();
-    attachBridge(serialDeviceToSerialLike(transport, d1), ws);
+    attachBridge(SimulatedDeviceToSerialLike(transport, d1), ws);
     await openFromApp(ws);
 
     const sentBefore = ws.sent.length;
@@ -408,10 +412,10 @@ class FakeWebSocketServer implements WebSocketServerLike {
   }
 }
 
-describe('exposeSerialDevice', () => {
+describe('exposeSimulatedDevice', () => {
   it('serves a typed simulator and resolves whenOpened on connect', async () => {
     FakeWebSocketServer.instances.length = 0;
-    const ex = exposeSerialDevice(new EchoDevice(FTDI), {
+    const ex = exposeSimulatedDevice(new LoopbackDevice(FTDI), {
       port: 8090,
       WebSocketServer: FakeWebSocketServer,
     });
@@ -435,7 +439,7 @@ describe('exposeSerialDevice', () => {
   });
 
   it('builds the URL with a custom host', () => {
-    const ex = exposeSerialDevice(new EchoDevice(FTDI), {
+    const ex = exposeSimulatedDevice(new LoopbackDevice(FTDI), {
       port: 8091,
       host: '0.0.0.0',
       WebSocketServer: FakeWebSocketServer,
@@ -450,10 +454,10 @@ describe('exposeSerialDevice', () => {
     try {
       jest.isolateModules(() => {
         const {
-          exposeSerialDevice: isolatedExposeSerialDevice,
+          exposeSimulatedDevice: isolatedExposeSimulatedDevice,
         } = require('../testing/expose');
         FakeWebSocketServer.instances.length = 0;
-        const ex = isolatedExposeSerialDevice(new EchoDevice(FTDI), {
+        const ex = isolatedExposeSimulatedDevice(new LoopbackDevice(FTDI), {
           port: 47199,
         });
         expect(FakeWebSocketServer.instances).toHaveLength(1);
@@ -474,10 +478,10 @@ describe('exposeSerialDevice', () => {
     try {
       jest.isolateModules(() => {
         const {
-          exposeSerialDevice: isolatedExposeSerialDevice,
+          exposeSimulatedDevice: isolatedExposeSimulatedDevice,
         } = require('../testing/expose');
         FakeWebSocketServer.instances.length = 0;
-        const ex = isolatedExposeSerialDevice(new EchoDevice(FTDI), {
+        const ex = isolatedExposeSimulatedDevice(new LoopbackDevice(FTDI), {
           port: 47198,
         });
         expect(FakeWebSocketServer.instances).toHaveLength(1);
@@ -497,10 +501,12 @@ describe('exposeSerialDevice', () => {
     try {
       jest.isolateModules(() => {
         const {
-          exposeSerialDevice: isolatedExposeSerialDevice,
+          exposeSimulatedDevice: isolatedExposeSimulatedDevice,
         } = require('../testing/expose');
         expect(() => {
-          isolatedExposeSerialDevice(new EchoDevice(FTDI), {port: 47197});
+          isolatedExposeSimulatedDevice(new LoopbackDevice(FTDI), {
+            port: 47197,
+          });
         }).toThrow("the 'ws' package did not export a WebSocketServer.");
       });
     } finally {
@@ -511,8 +517,8 @@ describe('exposeSerialDevice', () => {
 
   it('whenClosed() resolves immediately when the device has never been opened', async () => {
     // Covers expose.ts line 140: whenClosed: () => device.whenClosed()
-    // VirtualSerialDevice.whenClosed() returns Promise.resolve() when !isOpen (line 262)
-    const ex = exposeSerialDevice(new EchoDevice(FTDI), {
+    // VirtualSimulatedDevice.whenClosed() returns Promise.resolve() when !isOpen (line 262)
+    const ex = exposeSimulatedDevice(new LoopbackDevice(FTDI), {
       port: 47200,
       WebSocketServer: FakeWebSocketServer,
     });

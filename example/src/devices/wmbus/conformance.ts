@@ -16,12 +16,12 @@ import {Serial} from 'react-native-web-serial-api';
 import {
   assert,
   assertEqual,
-  compareResults,
-  runSerialTests,
+  compareTestResults,
+  InMemorySerialTransport,
+  runTestSuite,
   type SerialTest,
   type SerialTestProgress,
   type SerialTestResult,
-  VirtualSerialTransport,
 } from 'react-native-web-serial-api/testing';
 import {ByteReader} from './bytes';
 import {HciHost} from './HciHost';
@@ -742,14 +742,14 @@ export type ConformanceProgress = SerialTestProgress;
 
 /**
  * Run the full suite against an already-acquired port (opens & closes it). The
- * shipped {@link runSerialTests} drives one shared {@link HciHost} across every
+ * shipped {@link runTestSuite} drives one shared {@link HciHost} across every
  * case and collects a result per test without throwing.
  */
 export function runWMBusConformance(
   port: SerialPort,
   progress?: SerialTestProgress,
 ): Promise<WMBusTestResult[]> {
-  return runSerialTests(wmbusConformanceTests, port, {
+  return runTestSuite(wmbusConformanceTests, port, {
     client: {
       connect: p => HciHost.open(p),
       disconnect: host => host.close(),
@@ -760,7 +760,7 @@ export function runWMBusConformance(
 
 /** A fresh virtual gateway port — the reference the real device is compared to. */
 export async function makeVirtualGatewayPort(): Promise<SerialPort> {
-  const transport = new VirtualSerialTransport();
+  const transport = new InMemorySerialTransport();
   const gateway = new WMBusGateway('iU891A-XL');
   gateway.addMeter(
     new WMBusMeter({
@@ -807,7 +807,7 @@ export async function compareWithSimulator(
   const candidate = await runWMBusConformance(realPort, {
     onStart: progress?.onStart,
   });
-  const rows = compareResults(reference, candidate);
+  const rows = compareTestResults(reference, candidate);
   for (const row of rows) progress?.onResult?.(row);
   return rows;
 }

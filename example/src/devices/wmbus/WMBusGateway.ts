@@ -1,5 +1,5 @@
 /**
- * Simulated IMST Wireless M-Bus gateway, authored as a {@link SerialDevice}.
+ * Simulated IMST Wireless M-Bus gateway, authored as a {@link SimulatedDevice}.
  *
  * It speaks the IMST HCI protocol (SLIP + CRC-16/IBM-SDLC) over the virtual
  * serial link: the host writes framed requests, the gateway parses them in
@@ -7,7 +7,7 @@
  * {@link WMBusMeter}s whose telegrams are forwarded as WM-Bus Packet Received
  * (0x20) events. See WM_Bus_Gateway_HCI_Protocol_Specification.pdf.
  */
-import {SerialDevice} from 'react-native-web-serial-api/testing';
+import {SimulatedDevice} from 'react-native-web-serial-api/testing';
 import {ByteReader, ByteWriter} from './bytes';
 import {
   addressFromPacket,
@@ -99,7 +99,7 @@ const ZERO_ADDRESS: WMBusAddress = {
   type: 0,
 };
 
-export class WMBusGateway extends SerialDevice {
+export class WMBusGateway extends SimulatedDevice {
   readonly usbVendorId: number;
   readonly usbProductId: number;
   readonly serialNumber: string;
@@ -152,7 +152,7 @@ export class WMBusGateway extends SerialDevice {
     this.serialNumber = usb.serialNumber ?? `VIRT-${variant}`;
   }
 
-  // ── SerialDevice lifecycle ────────────────────────────────────────────────
+  // ── SimulatedDevice lifecycle ────────────────────────────────────────────────
 
   onOpen(): void {
     this.#open = true;

@@ -6,7 +6,7 @@
  * exactly as a host app would.
  */
 import {afterEach, beforeEach, describe, expect, it, jest} from '@jest/globals';
-import {mountSerialDevice} from 'react-native-web-serial-api/testing';
+import {createDeviceFixture} from 'react-native-web-serial-api/testing';
 import {ByteReader} from '../../src/devices/wmbus/bytes';
 import {HciHost} from '../../src/devices/wmbus/HciHost';
 import {
@@ -30,7 +30,7 @@ const ascii = (b: number[]): string => String.fromCharCode(...b);
 
 /** Mount a gateway simulator and an {@link HciHost} talking to it (host = app). */
 async function mount(variant: ModuleVariant = 'iU891A-XL') {
-  const {port} = await mountSerialDevice(new WMBusGateway(variant));
+  const {port} = await createDeviceFixture(new WMBusGateway(variant));
   const host = await HciHost.open(port);
   return {host};
 }

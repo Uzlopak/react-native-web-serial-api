@@ -2,9 +2,9 @@
  * Targeted tests for uncovered error/callback paths in serial-device-bridge.ts.
  */
 import {describe, expect, it} from '@jest/globals';
-import {EchoDevice, VirtualSerialTransport} from '../testing';
+import {InMemorySerialTransport, LoopbackDevice} from '../testing';
 import type {WsLike} from '../websocket';
-import {attachBridge, serialDeviceToSerialLike} from '../websocket';
+import {attachBridge, SimulatedDeviceToSerialLike} from '../websocket';
 
 const FTDI = {usbVendorId: 0x0403, usbProductId: 0x6001} as const;
 const flush = () => new Promise<void>(r => setTimeout(r, 0));
@@ -35,14 +35,14 @@ class FakeWs implements WsLike {
   }
 }
 
-describe('serialDeviceToSerialLike — error paths', () => {
+describe('SimulatedDeviceToSerialLike — error paths', () => {
   it('routes the error subscription (ErrorEvent → Error) through the bridge', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(FTDI), {
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(FTDI), {
       hasPermission: true,
     });
     const ws = new FakeWs();
-    attachBridge(serialDeviceToSerialLike(transport, device), ws);
+    attachBridge(SimulatedDeviceToSerialLike(transport, device), ws);
 
     ws.recvCommand({
       type: 'command',
@@ -63,11 +63,11 @@ describe('serialDeviceToSerialLike — error paths', () => {
   });
 
   it('write callback fires with null when the port is open', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(FTDI), {
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(FTDI), {
       hasPermission: true,
     });
-    const serial = serialDeviceToSerialLike(transport, device);
+    const serial = SimulatedDeviceToSerialLike(transport, device);
 
     // Open the port via the update path (mirrors what setLineCoding does).
     await new Promise<void>((resolve, reject) => {
@@ -85,11 +85,11 @@ describe('serialDeviceToSerialLike — error paths', () => {
   });
 
   it('flush callback fires without error', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(FTDI), {
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(FTDI), {
       hasPermission: true,
     });
-    const serial = serialDeviceToSerialLike(transport, device);
+    const serial = SimulatedDeviceToSerialLike(transport, device);
 
     let called = false;
     await new Promise<void>(resolve => {
@@ -103,11 +103,11 @@ describe('serialDeviceToSerialLike — error paths', () => {
   });
 
   it('drain callback fires without error', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(FTDI), {
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(FTDI), {
       hasPermission: true,
     });
-    const serial = serialDeviceToSerialLike(transport, device);
+    const serial = SimulatedDeviceToSerialLike(transport, device);
 
     let called = false;
     await new Promise<void>(resolve => {
@@ -121,8 +121,8 @@ describe('serialDeviceToSerialLike — error paths', () => {
   });
 
   it('close fires close callbacks and calls cb(null)', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(FTDI), {
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(FTDI), {
       hasPermission: true,
     });
     // Open first so close does real work
@@ -131,7 +131,7 @@ describe('serialDeviceToSerialLike — error paths', () => {
     });
     await transport.startReading(device.deviceId, device.portNumber);
 
-    const serial = serialDeviceToSerialLike(transport, device);
+    const serial = SimulatedDeviceToSerialLike(transport, device);
     let closeCalled = false;
     await new Promise<void>(resolve => {
       serial.close((err: Error | null | undefined) => {
@@ -144,11 +144,11 @@ describe('serialDeviceToSerialLike — error paths', () => {
   });
 
   it('removeListener for data/error triggers cleanupIfIdle', () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(FTDI), {
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(FTDI), {
       hasPermission: true,
     });
-    const serial = serialDeviceToSerialLike(transport, device);
+    const serial = SimulatedDeviceToSerialLike(transport, device);
 
     const listener = () => {};
     serial.on('data', listener);
@@ -159,12 +159,12 @@ describe('serialDeviceToSerialLike — error paths', () => {
   });
 
   it('set applies dtr, rts, brk and calls back successfully', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(FTDI), {
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(FTDI), {
       hasPermission: true,
       loopbackSignals: true,
     });
-    const serial = serialDeviceToSerialLike(transport, device);
+    const serial = SimulatedDeviceToSerialLike(transport, device);
 
     let called = false;
     await new Promise<void>(resolve => {

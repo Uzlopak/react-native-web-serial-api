@@ -1,7 +1,7 @@
 /**
  * Runtime-agnostic Web Serial conformance suite.
  *
- * Each test builds a fresh `Serial` wired to a {@link VirtualSerialTransport}
+ * Each test builds a fresh `Serial` wired to a {@link InMemorySerialTransport}
  * and asserts a slice of the W3C Web Serial behaviour. The suite depends on
  * nothing from `jest` (it ships its own tiny assertions), so the *exact same*
  * cases run:
@@ -20,6 +20,7 @@
  */
 
 import {EventTarget} from '../lib/event-target';
+import {createDeviceFixture} from '../testing/device-fixture';
 import {
   assert,
   assertEqual,
@@ -29,13 +30,16 @@ import {
   readBytes,
   withTimeout,
 } from '../testing/harness';
-import {mountSerialDevice} from '../testing/mount';
-import {EchoDevice, SerialDevice, SilentDevice} from '../testing/serial-device';
 import type {
-  VirtualSerialDeviceOptions,
-  VirtualSerialTransportOptions,
-} from '../testing/virtual-serial-device';
-import {VirtualSerialTransport} from '../testing/virtual-serial-device';
+  DeviceOptions,
+  InMemorySerialTransportOptions,
+} from '../testing/in-memory-serial-transport';
+import {InMemorySerialTransport} from '../testing/in-memory-serial-transport';
+import {
+  LoopbackDevice,
+  SimulatedDevice,
+  SinkDevice,
+} from '../testing/simulated-device';
 import type {SerialOptions} from '../WebSerial';
 import {Serial, SerialPort} from '../WebSerial';
 
@@ -60,11 +64,11 @@ const FTDI = {usbVendorId: 0x0403, usbProductId: 0x6001} as const;
 
 /** One permitted device + a Serial wired to it; the device echoes by default. */
 async function onePort(
-  device: SerialDevice = new EchoDevice(FTDI),
-  options: VirtualSerialDeviceOptions = {},
-  transportOptions: VirtualSerialTransportOptions = {},
+  device: SimulatedDevice = new LoopbackDevice(FTDI),
+  options: DeviceOptions = {},
+  transportOptions: InMemorySerialTransportOptions = {},
 ) {
-  const mounted = await mountSerialDevice(device, {
+  const mounted = await createDeviceFixture(device, {
     device: options,
     transport: transportOptions,
   });
@@ -98,7 +102,7 @@ function makePrng(seed: number): () => number {
 }
 
 /** Reads an 8-byte {seed,length} config, then streams `length` PRNG bytes. */
-class PrngDevice extends SerialDevice {
+class PrngDevice extends SimulatedDevice {
   readonly usbVendorId = FTDI.usbVendorId;
   readonly usbProductId = FTDI.usbProductId;
   onData(data: Uint8Array): void {
@@ -118,10 +122,10 @@ export const serialConformanceTests: ConformanceTest[] = [
   {
     name: 'getPorts() lists only devices the app has permission for',
     async run() {
-      const transport = new VirtualSerialTransport();
-      transport.addDevice(new EchoDevice(FTDI), {hasPermission: true});
+      const transport = new InMemorySerialTransport();
+      transport.addDevice(new LoopbackDevice(FTDI), {hasPermission: true});
       transport.addDevice(
-        new EchoDevice({usbVendorId: 0x10c4, usbProductId: 0xea60}),
+        new LoopbackDevice({usbVendorId: 0x10c4, usbProductId: 0xea60}),
         {hasPermission: false},
       );
       const serial = new Serial(transport);
@@ -141,9 +145,9 @@ export const serialConformanceTests: ConformanceTest[] = [
   {
     name: 'requestPort() grants permission and returns the chosen port',
     async run() {
-      const transport = new VirtualSerialTransport();
+      const transport = new InMemorySerialTransport();
       const device = transport.addDevice(
-        new EchoDevice({usbVendorId: 0x2341, usbProductId: 0x0043}),
+        new LoopbackDevice({usbVendorId: 0x2341, usbProductId: 0x0043}),
       );
       const serial = new Serial(transport);
       assertEqual(
@@ -164,8 +168,8 @@ export const serialConformanceTests: ConformanceTest[] = [
   {
     name: 'requestPort() rejects with NotFoundError when cancelled',
     async run() {
-      const transport = new VirtualSerialTransport();
-      transport.addDevice(new EchoDevice(FTDI));
+      const transport = new InMemorySerialTransport();
+      transport.addDevice(new LoopbackDevice(FTDI));
       const serial = new Serial(transport);
       transport.rejectNextPortPicker();
       await assertRejects(() => serial.requestPort(), 'cancelled picker', {
@@ -274,7 +278,7 @@ export const serialConformanceTests: ConformanceTest[] = [
   {
     name: 'writable forwards the host bytes to the device',
     async run() {
-      const {port, device} = await onePort(new SilentDevice(FTDI));
+      const {port, device} = await onePort(new SinkDevice(FTDI));
       await port.open({baudRate: 9600});
       const writer = port.writable!.getWriter();
       await writer.write(Uint8Array.from([0x41, 0x42, 0x43]));
@@ -291,7 +295,7 @@ export const serialConformanceTests: ConformanceTest[] = [
   {
     name: 'a scripted responder can answer host writes',
     async run() {
-      class ChecksumDevice extends SerialDevice {
+      class ChecksumDevice extends SimulatedDevice {
         readonly usbVendorId = FTDI.usbVendorId;
         readonly usbProductId = FTDI.usbProductId;
         onData(data: Uint8Array) {
@@ -488,7 +492,7 @@ export const serialConformanceTests: ConformanceTest[] = [
     async run() {
       // The device de-asserts CTS once its receive buffer fills; a small
       // threshold keeps the test fast and deterministic.
-      const {port} = await onePort(new EchoDevice(FTDI), {
+      const {port} = await onePort(new LoopbackDevice(FTDI), {
         flowControlThreshold: 16,
       });
       await port.open({

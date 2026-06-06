@@ -1,6 +1,6 @@
 import {describe, expect, it} from '@jest/globals';
-import {EchoDevice} from '../testing/serial-device';
-import {VirtualSerialTransport} from '../testing/virtual-serial-device';
+import {InMemorySerialTransport} from '../testing/in-memory-serial-transport';
+import {LoopbackDevice} from '../testing/simulated-device';
 import {Serial, SerialPort} from '../WebSerial';
 import {
   runRealDeviceSmokeTest,
@@ -46,8 +46,8 @@ describe('conformance runners and helper branches', () => {
   });
 
   it('runSerialConformance captures assertion mismatches from suite tests', async () => {
-    const original = VirtualSerialTransport.prototype.findAllDrivers;
-    VirtualSerialTransport.prototype.findAllDrivers = async () => [];
+    const original = InMemorySerialTransport.prototype.findAllDrivers;
+    InMemorySerialTransport.prototype.findAllDrivers = async () => [];
 
     try {
       const results = await runSerialConformance();
@@ -60,13 +60,13 @@ describe('conformance runners and helper branches', () => {
       expect(failed?.passed).toBe(false);
       expect(failed?.error).toContain('expected 1, got 0');
     } finally {
-      VirtualSerialTransport.prototype.findAllDrivers = original;
+      InMemorySerialTransport.prototype.findAllDrivers = original;
     }
   });
 
   it('runSerialConformance captures readable rejection paths', async () => {
-    const original = EchoDevice.prototype.onData;
-    EchoDevice.prototype.onData = function onDataForcedError() {
+    const original = LoopbackDevice.prototype.onData;
+    LoopbackDevice.prototype.onData = function onDataForcedError() {
       (this as unknown as {raiseError(message: string): void}).raiseError(
         'forced read failure',
       );
@@ -81,7 +81,7 @@ describe('conformance runners and helper branches', () => {
       expect(failed?.passed).toBe(false);
       expect(failed?.error).toContain('forced read failure');
     } finally {
-      EchoDevice.prototype.onData = original;
+      LoopbackDevice.prototype.onData = original;
     }
   });
 
@@ -176,13 +176,15 @@ describe('conformance runners and helper branches', () => {
   });
 
   it('runSerialConformance captures same-length byte mismatch and value-falsy reads', async () => {
-    const originalEcho = EchoDevice.prototype.onData;
+    const originalEcho = LoopbackDevice.prototype.onData;
     const originalGetter = Object.getOwnPropertyDescriptor(
       SerialPort.prototype,
       'readable',
     );
 
-    EchoDevice.prototype.onData = function onDataWrongBytes(data: Uint8Array) {
+    LoopbackDevice.prototype.onData = function onDataWrongBytes(
+      data: Uint8Array,
+    ) {
       const bytes = Array.from(data);
       bytes[0] = (bytes[0] + 1) & 0xff;
       (this as unknown as {send(data: number[]): void}).send(bytes);
@@ -216,7 +218,7 @@ describe('conformance runners and helper branches', () => {
       expect(failed?.passed).toBe(false);
       expect(failed?.error).toContain('echo mismatch');
     } finally {
-      EchoDevice.prototype.onData = originalEcho;
+      LoopbackDevice.prototype.onData = originalEcho;
       if (originalGetter) {
         Object.defineProperty(SerialPort.prototype, 'readable', originalGetter);
       }
@@ -224,8 +226,10 @@ describe('conformance runners and helper branches', () => {
   });
 
   it('runSerialConformance captures same-length byte mismatch in bytesEqual loop', async () => {
-    const originalEcho = EchoDevice.prototype.onData;
-    EchoDevice.prototype.onData = function onDataWrongBytes(data: Uint8Array) {
+    const originalEcho = LoopbackDevice.prototype.onData;
+    LoopbackDevice.prototype.onData = function onDataWrongBytes(
+      data: Uint8Array,
+    ) {
       const bytes = Array.from(data);
       bytes[0] = (bytes[0] + 1) & 0xff;
       (this as unknown as {send(data: number[]): void}).send(bytes);
@@ -240,7 +244,7 @@ describe('conformance runners and helper branches', () => {
       expect(failed?.passed).toBe(false);
       expect(failed?.error).toContain('echo mismatch');
     } finally {
-      EchoDevice.prototype.onData = originalEcho;
+      LoopbackDevice.prototype.onData = originalEcho;
     }
   });
 
@@ -287,7 +291,7 @@ describe('conformance runners and helper branches', () => {
   });
 
   it('runRealDeviceSmokeTest reports missing device without throwing', async () => {
-    const serial = new Serial(new VirtualSerialTransport());
+    const serial = new Serial(new InMemorySerialTransport());
 
     const results = await runRealDeviceSmokeTest(serial);
 
@@ -299,8 +303,10 @@ describe('conformance runners and helper branches', () => {
   });
 
   it('runRealDeviceSmokeTest records a failed open/close round-trip', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new EchoDevice(), {hasPermission: true});
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new LoopbackDevice(), {
+      hasPermission: true,
+    });
     device.failNext('open');
     const serial = new Serial(transport);
 

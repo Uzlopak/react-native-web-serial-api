@@ -18,7 +18,7 @@ import {colors} from '../theme';
 
 type Props = {
   // The active Web Serial entry point: the platform `serial` in real mode, or a
-  // VirtualSerialTransport-backed Serial in demo mode.
+  // InMemorySerialTransport-backed Serial in demo mode.
   serial: Serial;
   // Low-level enumerator (lists unpermitted devices too). Native USB on Android,
   // the virtual transport in demo mode, or null on web (fall back to getPorts).

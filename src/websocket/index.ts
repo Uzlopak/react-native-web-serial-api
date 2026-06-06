@@ -6,13 +6,13 @@
  *
  * Client side: `WebSocketSerialTransport` connects an app to a remote serial
  * port. Server side: {@link attachBridge} pipes a WebSocket to a serial port,
- * and {@link serialDeviceToSerialLike} lets that "serial port" be an in-memory
- * {@link SerialDevice} simulator (used by `testing/exposeSerialDevice`). The
+ * and {@link SimulatedDeviceToSerialLike} lets that "serial port" be an in-memory
+ * {@link SimulatedDevice} simulator (used by `testing/exposeSimulatedDevice`). The
  * wire protocol is in {@link ./protocol}; the bridge core in {@link ./bridge}.
  */
 
 // The bridge core + the in-memory device adapter, so a test can expose a
-// SerialDevice simulator over a WebSocket (see testing/exposeSerialDevice).
+// SimulatedDevice simulator over a WebSocket (see testing/exposeSimulatedDevice).
 export type {BridgeOptions, SerialLike, WsLike} from './bridge';
 export {attachBridge} from './bridge';
 export type {
@@ -28,7 +28,7 @@ export type {
 } from './protocol';
 export {
   portInfoFromDevice,
-  serialDeviceToSerialLike,
+  SimulatedDeviceToSerialLike,
 } from './serial-device-bridge';
 export type {
   WebSocketCtor,

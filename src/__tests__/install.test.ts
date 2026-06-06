@@ -1,27 +1,31 @@
 /**
- * Unit tests for installSerialMock — the one-call app-injection entrypoint
+ * Unit tests for installInMemorySerialTransport — the one-call app-injection entrypoint
  * (otherwise only exercised by the Maestro E2E run).
  */
 import {afterEach, describe, expect, it} from '@jest/globals';
-import {EchoDevice, installSerialMock, SilentDevice} from '../testing';
+import {
+  installInMemorySerialTransport,
+  LoopbackDevice,
+  SinkDevice,
+} from '../testing';
 import {getUsbSerial, resetUsbSerial} from '../UsbSerial';
 
 afterEach(() => {
   resetUsbSerial();
 });
 
-describe('installSerialMock', () => {
+describe('installInMemorySerialTransport', () => {
   it('installs nothing and returns null when disabled', () => {
-    const result = installSerialMock({
+    const result = installInMemorySerialTransport({
       enabled: false,
-      devices: [new EchoDevice()],
+      devices: [new LoopbackDevice()],
     });
     expect(result).toBeNull();
   });
 
-  it('installs a transport globally and grants SerialDevices permission', () => {
-    const transport = installSerialMock({
-      devices: [new EchoDevice(), new SilentDevice()],
+  it('installs a transport globally and grants SimulatedDevices permission', () => {
+    const transport = installInMemorySerialTransport({
+      devices: [new LoopbackDevice(), new SinkDevice()],
     });
     expect(transport).not.toBeNull();
     expect(getUsbSerial()).toBe(transport);
@@ -30,10 +34,13 @@ describe('installSerialMock', () => {
   });
 
   it('supports the {device, options} form', () => {
-    const transport = installSerialMock({
+    const transport = installInMemorySerialTransport({
       devices: [
         {
-          device: new EchoDevice({usbVendorId: 0x1234, usbProductId: 0x5678}),
+          device: new LoopbackDevice({
+            usbVendorId: 0x1234,
+            usbProductId: 0x5678,
+          }),
           options: {portNumber: 3},
         },
       ],
@@ -45,8 +52,8 @@ describe('installSerialMock', () => {
   });
 
   it('forwards transport options', async () => {
-    const transport = installSerialMock({
-      devices: [new EchoDevice()],
+    const transport = installInMemorySerialTransport({
+      devices: [new LoopbackDevice()],
       transport: {chunkSize: 8, latencyMs: 1},
     });
     expect(transport).not.toBeNull();

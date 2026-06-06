@@ -16,12 +16,12 @@ import type {SerialPort} from 'react-native-web-serial-api';
 import {Serial} from 'react-native-web-serial-api';
 import {
   assert,
-  compareResults,
+  compareTestResults,
   errorMessage,
-  SerialTestHarness,
+  InMemorySerialTransport,
+  SerialClient,
   type SerialTestProgress,
   type SerialTestResult,
-  VirtualSerialTransport,
 } from 'react-native-web-serial-api/testing';
 import {NmeaGpsDevice} from './NmeaGpsDevice';
 import {checksum} from './nmea';
@@ -298,13 +298,13 @@ export const gpsConformanceTests: GpsConformanceTest[] = [
 // ── an NMEA line reader over a SerialPort ────────────────────────────────────
 
 /**
- * Read sentences off a {@link SerialTestHarness} until `wantTypes` have all been seen
+ * Read sentences off a {@link SerialClient} until `wantTypes` have all been seen
  * (a full cycle) or `timeoutMs` elapses — fast for the emulator, ~1–2 s for real
- * hardware. `SerialTestHarness.readLine` does the line framing the collector used to
+ * hardware. `SerialClient.readLine` does the line framing the collector used to
  * hand-roll.
  */
 async function collectSentences(
-  client: SerialTestHarness,
+  client: SerialClient,
   options: {wantTypes: string[]; minSentences: number; timeoutMs: number},
 ): Promise<NmeaSentence[]> {
   const out: NmeaSentence[] = [];
@@ -341,7 +341,7 @@ export async function runGpsConformance(
   port: SerialPort,
   progress?: GpsConformanceProgress,
 ): Promise<GpsTestResult[]> {
-  const client = new SerialTestHarness(port);
+  const client = new SerialClient(port);
   try {
     await client.open({baudRate: 9600});
   } catch (e) {
@@ -389,7 +389,7 @@ export async function runGpsConformance(
 
 /** A fresh virtual GPS port — the reference a real receiver is compared to. */
 export async function makeVirtualGpsPort(): Promise<SerialPort> {
-  const transport = new VirtualSerialTransport();
+  const transport = new InMemorySerialTransport();
   // A brisk cycle so the reference run completes quickly; real receivers
   // typically stream at 1 Hz, which the collector's timeout accommodates.
   transport.addDevice(new NmeaGpsDevice({intervalMs: 100}), {
@@ -407,7 +407,7 @@ export async function makeVirtualGpsPort(): Promise<SerialPort> {
  * Run the suite against `realPort` and against the emulator, returning one
  * result per case: `passed` means the real receiver behaved identically to the
  * emulator (both pass / both fail the same case), via the shipped
- * {@link compareResults}.
+ * {@link compareTestResults}.
  */
 export async function compareGpsWithSimulator(
   realPort: SerialPort,
@@ -422,7 +422,7 @@ export async function compareGpsWithSimulator(
   const candidate = await runGpsConformance(realPort, {
     onStart: progress?.onStart,
   });
-  const compared = compareResults(reference, candidate);
+  const compared = compareTestResults(reference, candidate);
   for (const row of compared) progress?.onResult?.(row);
   return compared;
 }

@@ -1,24 +1,24 @@
 /**
  * Direct unit tests for the Serial/SerialPort polyfill, driven entirely through
- * an injected VirtualSerialTransport (no native module, no NativeModules mocks).
+ * an injected InMemorySerialTransport (no native module, no NativeModules mocks).
  * These complement the shared conformance suite with finer-grained assertions.
  */
 import {describe, expect, it, jest} from '@jest/globals';
 import type {Event} from '../lib/event-target';
+import {InMemorySerialTransport} from '../testing/in-memory-serial-transport';
 import {
-  EchoDevice,
-  type SerialDevice,
-  SilentDevice,
-} from '../testing/serial-device';
-import {VirtualSerialTransport} from '../testing/virtual-serial-device';
+  LoopbackDevice,
+  type SimulatedDevice,
+  SinkDevice,
+} from '../testing/simulated-device';
 import type {SerialTransport} from '../transport';
 import {resetUsbSerial, setUsbSerial} from '../UsbSerial';
 import {Serial, SerialPort} from '../WebSerial';
 
 const FTDI = {usbVendorId: 0x0403, usbProductId: 0x6001} as const;
 
-function setup(device: SerialDevice = new EchoDevice(FTDI)) {
-  const transport = new VirtualSerialTransport();
+function setup(device: SimulatedDevice = new LoopbackDevice(FTDI)) {
+  const transport = new InMemorySerialTransport();
   const handle = transport.addDevice(device, {hasPermission: true});
   const serial = new Serial(transport);
   return {transport, device: handle, serial};
@@ -46,10 +46,10 @@ describe('Serial.getPorts()', () => {
   });
 
   it('skips devices without USB permission', async () => {
-    const transport = new VirtualSerialTransport();
-    transport.addDevice(new EchoDevice(FTDI), {hasPermission: true});
+    const transport = new InMemorySerialTransport();
+    transport.addDevice(new LoopbackDevice(FTDI), {hasPermission: true});
     transport.addDevice(
-      new EchoDevice({usbVendorId: 0x10c4, usbProductId: 0xea60}),
+      new LoopbackDevice({usbVendorId: 0x10c4, usbProductId: 0xea60}),
       {hasPermission: false},
     );
     const serial = new Serial(transport);
@@ -109,7 +109,7 @@ describe('SerialPort.open()', () => {
   });
 
   it('forget() closes an open port before marking it forgotten', async () => {
-    const {serial} = setup(new SilentDevice(FTDI));
+    const {serial} = setup(new SinkDevice(FTDI));
     const [port] = await serial.getPorts();
 
     await port.open({baudRate: 9600});
@@ -258,7 +258,7 @@ describe('SerialPort.open()', () => {
   });
 
   it('does not revive a port if forget() is called while open() is in flight', async () => {
-    const {serial, transport} = setup(new SilentDevice(FTDI));
+    const {serial, transport} = setup(new SinkDevice(FTDI));
     const [port] = await serial.getPorts();
 
     let releaseOpen: () => void = () => {
@@ -291,7 +291,7 @@ describe('SerialPort.open()', () => {
   });
 
   it('does not revive a port if forget() is called while close() is in flight', async () => {
-    const {serial} = setup(new SilentDevice(FTDI));
+    const {serial} = setup(new SinkDevice(FTDI));
     const [port] = await serial.getPorts();
 
     await port.open({baudRate: 9600});
@@ -318,7 +318,7 @@ describe('SerialPort.open()', () => {
   });
 
   it('throws NetworkError when state changes during open() for non-forget reasons', async () => {
-    const {serial, transport, device} = setup(new SilentDevice(FTDI));
+    const {serial, transport, device} = setup(new SinkDevice(FTDI));
     const [port] = await serial.getPorts();
 
     jest.spyOn(transport, 'startReading').mockImplementationOnce(async () => {
@@ -338,7 +338,7 @@ describe('SerialPort.open()', () => {
   });
 
   it('keeps forgotten state when startReading fails after forget() during open()', async () => {
-    const {serial, transport} = setup(new SilentDevice(FTDI));
+    const {serial, transport} = setup(new SinkDevice(FTDI));
     const [port] = await serial.getPorts();
 
     let releaseStartReading: () => void = () => {
@@ -508,7 +508,7 @@ describe('SerialPort streams', () => {
   });
 
   it('preserves byte order across multiple writes', async () => {
-    const {serial, device} = setup(new SilentDevice(FTDI));
+    const {serial, device} = setup(new SinkDevice(FTDI));
     const [port] = await serial.getPorts();
     await port.open({baudRate: 9600});
     const writer = port.writable!.getWriter();
@@ -521,7 +521,7 @@ describe('SerialPort streams', () => {
   });
 
   it('delivers device-pushed bytes to the readable stream', async () => {
-    const {serial, device} = setup(new SilentDevice(FTDI));
+    const {serial, device} = setup(new SinkDevice(FTDI));
     const [port] = await serial.getPorts();
     await port.open({baudRate: 9600});
     const reader = port.readable!.getReader();
@@ -550,7 +550,7 @@ describe('SerialPort streams', () => {
   });
 
   it('swallows purge errors during readable cancel', async () => {
-    const {serial, transport} = setup(new SilentDevice(FTDI));
+    const {serial, transport} = setup(new SinkDevice(FTDI));
     const [port] = await serial.getPorts();
     await port.open({baudRate: 9600});
 
@@ -563,7 +563,7 @@ describe('SerialPort streams', () => {
   });
 
   it('swallows purge errors during writable abort', async () => {
-    const {serial, transport} = setup(new SilentDevice(FTDI));
+    const {serial, transport} = setup(new SinkDevice(FTDI));
     const [port] = await serial.getPorts();
     await port.open({baudRate: 9600});
 
@@ -576,7 +576,7 @@ describe('SerialPort streams', () => {
   });
 
   it('errors the writable stream when the device is detached', async () => {
-    const {serial, device} = setup(new SilentDevice(FTDI));
+    const {serial, device} = setup(new SinkDevice(FTDI));
     const [port] = await serial.getPorts();
     await port.open({baudRate: 9600});
     const writer = port.writable!.getWriter();
@@ -589,7 +589,7 @@ describe('SerialPort streams', () => {
   });
 
   it('runs writable close algorithm', async () => {
-    const {serial} = setup(new SilentDevice(FTDI));
+    const {serial} = setup(new SinkDevice(FTDI));
     const [port] = await serial.getPorts();
     await port.open({baudRate: 9600});
 
@@ -598,7 +598,7 @@ describe('SerialPort streams', () => {
   });
 
   it('ignores close() cancel/abort rejections from locked streams', async () => {
-    const {serial} = setup(new SilentDevice(FTDI));
+    const {serial} = setup(new SinkDevice(FTDI));
     const [port] = await serial.getPorts();
     await port.open({baudRate: 9600});
 
@@ -619,12 +619,12 @@ describe('SerialPort streams', () => {
   });
 
   it('ignores non-matching data/error events for readable subscriptions', async () => {
-    const transport = new VirtualSerialTransport();
-    const a = transport.addDevice(new SilentDevice(FTDI), {
+    const transport = new InMemorySerialTransport();
+    const a = transport.addDevice(new SinkDevice(FTDI), {
       hasPermission: true,
     });
     const b = transport.addDevice(
-      new SilentDevice({usbVendorId: 0x10c4, usbProductId: 0xea60}),
+      new SinkDevice({usbVendorId: 0x10c4, usbProductId: 0xea60}),
       {hasPermission: true},
     );
     const serial = new Serial(transport);
@@ -648,7 +648,7 @@ describe('SerialPort streams', () => {
   });
 
   it('errors the readable stream when the device reports a matching error', async () => {
-    const {serial, device} = setup(new SilentDevice(FTDI));
+    const {serial, device} = setup(new SinkDevice(FTDI));
     const [port] = await serial.getPorts();
     await port.open({baudRate: 9600});
     const reader = port.readable!.getReader();
@@ -665,7 +665,7 @@ describe('SerialPort streams', () => {
   });
 
   it('uses NetworkError when the device error omits an explicit name', async () => {
-    const {serial, device} = setup(new SilentDevice(FTDI));
+    const {serial, device} = setup(new SinkDevice(FTDI));
     const [port] = await serial.getPorts();
     await port.open({baudRate: 9600});
     const reader = port.readable!.getReader();
@@ -682,7 +682,7 @@ describe('SerialPort streams', () => {
   });
 
   it('wraps write transport failures as NetworkError and closes writable stream', async () => {
-    const {serial, device} = setup(new SilentDevice(FTDI));
+    const {serial, device} = setup(new SinkDevice(FTDI));
     const [port] = await serial.getPorts();
     await port.open({baudRate: 9600});
     const writer = port.writable!.getWriter();
@@ -781,12 +781,12 @@ describe('Serial connect/disconnect events', () => {
   });
 
   it('dispatches serial-level connect/disconnect for unrelated devices', async () => {
-    const transport = new VirtualSerialTransport();
-    const first = transport.addDevice(new EchoDevice(FTDI), {
+    const transport = new InMemorySerialTransport();
+    const first = transport.addDevice(new LoopbackDevice(FTDI), {
       hasPermission: true,
     });
     transport.addDevice(
-      new EchoDevice({usbVendorId: 0x10c4, usbProductId: 0xea60}),
+      new LoopbackDevice({usbVendorId: 0x10c4, usbProductId: 0xea60}),
       {
         hasPermission: true,
       },
@@ -811,10 +811,10 @@ describe('Serial connect/disconnect events', () => {
   });
 
   it('treats same-VID but different-PID attach as unrelated connect', async () => {
-    const transport = new VirtualSerialTransport();
-    transport.addDevice(new EchoDevice(FTDI), {hasPermission: true});
+    const transport = new InMemorySerialTransport();
+    transport.addDevice(new LoopbackDevice(FTDI), {hasPermission: true});
     const sibling = transport.addDevice(
-      new EchoDevice({usbVendorId: FTDI.usbVendorId, usbProductId: 0x6015}),
+      new LoopbackDevice({usbVendorId: FTDI.usbVendorId, usbProductId: 0x6015}),
       {hasPermission: true},
     );
 
@@ -830,8 +830,8 @@ describe('Serial connect/disconnect events', () => {
   });
 
   it('fires serial-level connect when an attached brand-new identity has no known-port match', async () => {
-    const transport = new VirtualSerialTransport();
-    transport.addDevice(new EchoDevice(FTDI), {hasPermission: true});
+    const transport = new InMemorySerialTransport();
+    transport.addDevice(new LoopbackDevice(FTDI), {hasPermission: true});
     const serial = new Serial(transport);
     await serial.getPorts();
 
@@ -839,7 +839,7 @@ describe('Serial connect/disconnect events', () => {
     serial.onconnect = connectSpy;
 
     const newcomer = transport.addDevice(
-      new EchoDevice({usbVendorId: 0x1a86, usbProductId: 0x7523}),
+      new LoopbackDevice({usbVendorId: 0x1a86, usbProductId: 0x7523}),
       {hasPermission: true},
     );
     newcomer.detach();
@@ -849,9 +849,13 @@ describe('Serial connect/disconnect events', () => {
   });
 
   it('does not remap an ambiguous attach when multiple disconnected ports share VID/PID', async () => {
-    const transport = new VirtualSerialTransport();
-    const a = transport.addDevice(new EchoDevice(FTDI), {hasPermission: true});
-    const b = transport.addDevice(new EchoDevice(FTDI), {hasPermission: true});
+    const transport = new InMemorySerialTransport();
+    const a = transport.addDevice(new LoopbackDevice(FTDI), {
+      hasPermission: true,
+    });
+    const b = transport.addDevice(new LoopbackDevice(FTDI), {
+      hasPermission: true,
+    });
     const serial = new Serial(transport);
     const ports = await serial.getPorts();
     expect(ports).toHaveLength(2);
@@ -900,7 +904,7 @@ describe('Serial connect/disconnect events', () => {
   });
 
   it('keeps forgotten state when a forgotten device is physically lost', async () => {
-    const {serial, device} = setup(new SilentDevice(FTDI));
+    const {serial, device} = setup(new SinkDevice(FTDI));
     const [port] = await serial.getPorts();
 
     await port.open({baudRate: 9600});
@@ -1135,7 +1139,7 @@ describe('Serial initialization fallback', () => {
   });
 
   it('returns empty info when a SerialPort has no usb identifiers', () => {
-    const transport = new VirtualSerialTransport();
+    const transport = new InMemorySerialTransport();
     const fake = new SerialPort(
       transport,
       1,
@@ -1147,8 +1151,8 @@ describe('Serial initialization fallback', () => {
   });
 
   it('boots from the global setUsbSerial() override and handles clean detach', async () => {
-    const transport = new VirtualSerialTransport();
-    const device = transport.addDevice(new SilentDevice(FTDI), {
+    const transport = new InMemorySerialTransport();
+    const device = transport.addDevice(new SinkDevice(FTDI), {
       hasPermission: true,
     });
     setUsbSerial(transport);
@@ -1170,7 +1174,7 @@ describe('Serial initialization fallback', () => {
   });
 
   it('treats disconnect events without a lost flag as physical loss', async () => {
-    class DisconnectWithoutLostTransport extends VirtualSerialTransport {
+    class DisconnectWithoutLostTransport extends InMemorySerialTransport {
       #disconnectListener:
         | ((event: {
             deviceId: number;
@@ -1200,7 +1204,7 @@ describe('Serial initialization fallback', () => {
     }
 
     const transport = new DisconnectWithoutLostTransport();
-    const device = transport.addDevice(new SilentDevice(FTDI), {
+    const device = transport.addDevice(new SinkDevice(FTDI), {
       hasPermission: true,
     });
     setUsbSerial(transport);
@@ -1227,7 +1231,7 @@ describe('Serial initialization fallback', () => {
 
 describe('SerialPort review-hardening fixes', () => {
   it('does not drop inbound data sent before readable is first accessed', async () => {
-    const {serial, device} = setup(new SilentDevice(FTDI));
+    const {serial, device} = setup(new SinkDevice(FTDI));
     const [port] = await serial.getPorts();
     await port.open({baudRate: 9600});
 
@@ -1251,7 +1255,7 @@ describe('SerialPort review-hardening fixes', () => {
   });
 
   it('scales the native write timeout with payload size and baud rate', async () => {
-    const {serial, transport} = setup(new SilentDevice(FTDI));
+    const {serial, transport} = setup(new SinkDevice(FTDI));
     const [port] = await serial.getPorts();
     await port.open({baudRate: 9600});
 
@@ -1274,7 +1278,7 @@ describe('SerialPort review-hardening fixes', () => {
   });
 
   it('writes any BufferSource chunk, not just Uint8Array', async () => {
-    const {serial, device} = setup(new SilentDevice(FTDI));
+    const {serial, device} = setup(new SinkDevice(FTDI));
     const [port] = await serial.getPorts();
     await port.open({baudRate: 9600});
     const writer = port.writable!.getWriter();
@@ -1304,7 +1308,7 @@ describe('SerialPort review-hardening fixes', () => {
   });
 
   it('remaps a reattached device and supports reopen + I/O on the new deviceId', async () => {
-    const {serial, device} = setup(new EchoDevice(FTDI));
+    const {serial, device} = setup(new LoopbackDevice(FTDI));
     const [port] = await serial.getPorts();
     const firstDeviceId = device.deviceId;
     await port.open({baudRate: 9600});
@@ -1341,7 +1345,7 @@ describe('SerialPort review-hardening fixes', () => {
   });
 
   it('does not crash when inbound data races readable cancel()', async () => {
-    const {serial, transport, device} = setup(new SilentDevice(FTDI));
+    const {serial, transport, device} = setup(new SinkDevice(FTDI));
     const [port] = await serial.getPorts();
     await port.open({baudRate: 9600});
     const reader = port.readable!.getReader();
@@ -1380,7 +1384,7 @@ describe('SerialPort review-hardening fixes', () => {
   });
 
   it('re-acquires readable after cancel() and keeps receiving while open', async () => {
-    const {serial, device} = setup(new SilentDevice(FTDI));
+    const {serial, device} = setup(new SinkDevice(FTDI));
     const [port] = await serial.getPorts();
     await port.open({baudRate: 9600});
 

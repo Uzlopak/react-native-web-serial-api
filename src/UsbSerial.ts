@@ -266,7 +266,7 @@ export function getUsbSerial(): SerialTransport {
 
 /**
  * Override the transport returned by {@link getUsbSerial}. Pass a
- * {@link SerialTransport} (e.g. a `VirtualSerialTransport`) to make the
+ * {@link SerialTransport} (e.g. an `InMemorySerialTransport`) to make the
  * singleton `serial` instance — and any `new Serial()` created without an
  * explicit transport — talk to it instead of real hardware. Pass `null` to
  * clear the override.

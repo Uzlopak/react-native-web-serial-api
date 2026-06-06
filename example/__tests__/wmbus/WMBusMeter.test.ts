@@ -6,7 +6,7 @@
  * has switched the receiver on (Set Active Configuration with a link mode).
  */
 import {afterEach, beforeEach, describe, expect, it, jest} from '@jest/globals';
-import {mountSerialDevice} from 'react-native-web-serial-api/testing';
+import {createDeviceFixture} from 'react-native-web-serial-api/testing';
 import {ByteReader} from '../../src/devices/wmbus/bytes';
 import {readAddress} from '../../src/devices/wmbus/frame';
 import {HciHost} from '../../src/devices/wmbus/HciHost';
@@ -33,7 +33,7 @@ const ADDRESS = {
 /** Mount a gateway simulator and an {@link HciHost} acting as the host app. */
 async function mount() {
   const gateway = new WMBusGateway('iU891A-XL');
-  const {port} = await mountSerialDevice(gateway);
+  const {port} = await createDeviceFixture(gateway);
   const host = await HciHost.open(port);
   return {gateway, host};
 }
