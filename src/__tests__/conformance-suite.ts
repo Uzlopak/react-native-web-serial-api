@@ -20,6 +20,16 @@
  */
 
 import {EventTarget} from '../lib/event-target';
+import {
+  assert,
+  assertEqual,
+  assertRejects,
+  bytesEqual,
+  errorMessage,
+  readBytes,
+  withTimeout,
+} from '../testing/harness';
+import {mountSerialDevice} from '../testing/mount';
 import {EchoDevice, SerialDevice, SilentDevice} from '../testing/serial-device';
 import type {
   VirtualSerialDeviceOptions,
@@ -41,99 +51,10 @@ export type ConformanceResult = {
   durationMs: number;
 };
 
-// ── Tiny assertion helpers (no test-runner dependency) ───────────────────────
-
-function assert(condition: unknown, message: string): asserts condition {
-  if (!condition) throw new Error(message);
-}
-
-function assertEqual<T>(actual: T, expected: T, message: string): void {
-  if (actual !== expected) {
-    throw new Error(
-      `${message} (expected ${String(expected)}, got ${String(actual)})`,
-    );
-  }
-}
-
-function bytesEqual(a: ArrayLike<number>, b: ArrayLike<number>): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-  return true;
-}
-
-async function assertRejects(
-  fn: () => Promise<unknown>,
-  message: string,
-  expected?: {name?: string; type?: new (...args: never[]) => Error},
-): Promise<void> {
-  try {
-    await fn();
-  } catch (e) {
-    const err = e as Error;
-    if (expected?.name && err.name !== expected.name) {
-      throw new Error(
-        `${message}: expected error "${expected.name}" but got "${err.name}"`,
-      );
-    }
-    if (expected?.type && !(err instanceof expected.type)) {
-      throw new Error(`${message}: expected a ${expected.type.name}`);
-    }
-    return;
-  }
-  throw new Error(`${message}: expected a rejection but none occurred`);
-}
-
-function errorMessage(e: unknown): string {
-  return e instanceof Error ? `${e.name}: ${e.message}` : String(e);
-}
-
-type ByteReader = {
-  read(): Promise<{done: boolean; value?: Uint8Array}>;
-  releaseLock(): void;
-};
-
-function withTimeout<T>(
-  promise: Promise<T>,
-  ms: number,
-  label: string,
-): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`timed out: ${label}`)),
-      ms,
-    );
-    promise.then(
-      v => {
-        clearTimeout(timer);
-        resolve(v);
-      },
-      e => {
-        clearTimeout(timer);
-        reject(e);
-      },
-    );
-  });
-}
-
-async function readBytes(
-  reader: ByteReader,
-  count: number,
-  timeoutMs = 2000,
-): Promise<number[]> {
-  const out: number[] = [];
-  while (out.length < count) {
-    const {done, value} = await withTimeout(
-      reader.read(),
-      timeoutMs,
-      `reading ${count} bytes (got ${out.length})`,
-    );
-    if (done) break;
-    if (value) out.push(...value);
-  }
-  return out;
-}
-
 // ── Shared fixtures ──────────────────────────────────────────────────────────
+// The assertion + stream helpers used below (assert/assertEqual/assertRejects/
+// bytesEqual/withTimeout/readBytes) are imported from the *shipped*
+// `../testing/harness` module, so consumers' tests get the very same primitives.
 
 const FTDI = {usbVendorId: 0x0403, usbProductId: 0x6001} as const;
 
@@ -143,12 +64,16 @@ async function onePort(
   options: VirtualSerialDeviceOptions = {},
   transportOptions: VirtualSerialTransportOptions = {},
 ) {
-  const transport = new VirtualSerialTransport(transportOptions);
-  const handle = transport.addDevice(device, {hasPermission: true, ...options});
-  const serial = new Serial(transport);
-  const [port] = await serial.getPorts();
-  assert(port !== undefined, 'fixture failed: expected one port');
-  return {transport, serial, device: handle, port};
+  const mounted = await mountSerialDevice(device, {
+    device: options,
+    transport: transportOptions,
+  });
+  return {
+    transport: mounted.transport,
+    serial: mounted.serial,
+    device: mounted.device,
+    port: mounted.port,
+  };
 }
 
 // ── Helpers for the WPT-derived cases (ported from tmp/serial) ────────────────

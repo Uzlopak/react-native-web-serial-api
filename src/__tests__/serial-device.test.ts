@@ -6,40 +6,15 @@ import {describe, expect, it} from '@jest/globals';
 import {
   EchoDevice,
   LineDevice,
+  readBytes,
   SerialDevice,
   VirtualSerialTransport,
 } from '../testing';
 import {Serial} from '../WebSerial';
 
 const enc = (s: string): Uint8Array => Uint8Array.from(s, c => c.charCodeAt(0));
-const dec = (b: Uint8Array): string => String.fromCharCode(...b);
-
-type ByteReader = {
-  read(): Promise<{done: boolean; value?: Uint8Array}>;
-};
-
-/** Read until at least `targetLength` bytes arrive (or the stream closes). */
-async function readWithLength(
-  reader: ByteReader,
-  targetLength: number,
-): Promise<Uint8Array> {
-  const chunks: Uint8Array[] = [];
-  let actualLength = 0;
-  while (actualLength < targetLength) {
-    const {value, done} = await reader.read();
-    if (value) {
-      chunks.push(value);
-      actualLength += value.byteLength;
-    }
-    if (done) break;
-  }
-  const buffer = new Uint8Array(actualLength);
-  chunks.reduce((offset, chunk) => {
-    buffer.set(chunk, offset);
-    return offset + chunk.byteLength;
-  }, 0);
-  return buffer;
-}
+const dec = (b: ArrayLike<number>): string =>
+  String.fromCharCode(...Array.from(b));
 
 async function mount(device: SerialDevice) {
   const transport = new VirtualSerialTransport();
@@ -78,7 +53,7 @@ describe('SerialDevice', () => {
     const reader = port.readable!.getReader();
     const writer = port.writable!.getWriter();
     await writer.write(enc('hello'));
-    expect(dec(await readWithLength(reader, 5))).toBe('hello');
+    expect(dec(await readBytes(reader, 5))).toBe('hello');
     reader.releaseLock();
     writer.releaseLock();
     await port.close();
@@ -130,10 +105,10 @@ describe('SerialDevice', () => {
     const writer = port.writable!.getWriter();
 
     await writer.write(enc('PING\n'));
-    expect(dec(await readWithLength(reader, 6))).toBe('PONG\r\n');
+    expect(dec(await readBytes(reader, 6))).toBe('PONG\r\n');
 
     await writer.write(enc('NOPE\n'));
-    expect(dec(await readWithLength(reader, 10))).toBe('ERR NOPE\r\n');
+    expect(dec(await readBytes(reader, 10))).toBe('ERR NOPE\r\n');
 
     reader.releaseLock();
     writer.releaseLock();

@@ -241,6 +241,40 @@ export class VirtualSerialDevice {
   loseDevice(): void {
     this.#transport.loseDevice(this);
   }
+
+  readonly #openWaiters = new Set<(options: Required<OpenOptions>) => void>();
+  readonly #closeWaiters = new Set<() => void>();
+
+  /**
+   * Resolve when the host opens this port (immediately if already open). Lets a
+   * test `await` the app connecting before driving the device.
+   */
+  whenOpened(): Promise<Required<OpenOptions>> {
+    if (this.isOpen && this.openOptions) {
+      return Promise.resolve(this.openOptions);
+    }
+    return new Promise(resolve => this.#openWaiters.add(resolve));
+  }
+
+  /** Resolve when the host closes this port (immediately if not open). */
+  whenClosed(): Promise<void> {
+    if (!this.isOpen) {
+      return Promise.resolve();
+    }
+    return new Promise(resolve => this.#closeWaiters.add(resolve));
+  }
+
+  /** @internal The transport calls this right after the port opens. */
+  _notifyOpen(options: Required<OpenOptions>): void {
+    for (const waiter of [...this.#openWaiters]) waiter(options);
+    this.#openWaiters.clear();
+  }
+
+  /** @internal The transport calls this right after the port closes/detaches. */
+  _notifyClose(): void {
+    for (const waiter of [...this.#closeWaiters]) waiter();
+    this.#closeWaiters.clear();
+  }
 }
 
 type Listener<E> = (event: E) => void;
@@ -357,9 +391,11 @@ export class VirtualSerialTransport implements SerialTransport {
   /** Detach a device and fire "disconnect"; any open port becomes closed. */
   detach(device: VirtualSerialDevice): void {
     const {deviceId, usbVendorId, usbProductId} = device;
+    const wasOpen = device.isOpen;
     device.attached = false;
     device.isOpen = false;
     device.reading = false;
+    if (wasOpen) device._notifyClose();
     this.#emit(this.#disconnectListeners, {
       deviceId,
       usbVendorId,
@@ -497,6 +533,7 @@ export class VirtualSerialTransport implements SerialTransport {
     device.openOptions = {...DEFAULT_OPEN_OPTIONS, ...options};
     device._hwWritten = 0;
     this.#invokeHook(() => device.serialDevice.onOpen(device.openOptions!));
+    device._notifyOpen(device.openOptions);
     return this.#resolve();
   }
 
@@ -509,6 +546,7 @@ export class VirtualSerialTransport implements SerialTransport {
       device.isOpen = false;
       device.reading = false;
       this.#invokeHook(() => device.serialDevice.onClose());
+      device._notifyClose();
     }
     return this.#resolve();
   }

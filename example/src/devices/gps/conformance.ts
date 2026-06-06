@@ -14,34 +14,22 @@
 
 import type {SerialPort} from 'react-native-web-serial-api';
 import {Serial} from 'react-native-web-serial-api';
-import {VirtualSerialTransport} from 'react-native-web-serial-api/testing';
+import {
+  assert,
+  compareResults,
+  errorMessage,
+  SerialClient,
+  type SerialTestProgress,
+  type SerialTestResult,
+  VirtualSerialTransport,
+} from 'react-native-web-serial-api/testing';
 import {NmeaGpsDevice} from './NmeaGpsDevice';
 import {checksum} from './nmea';
 
-export type GpsTestResult = {
-  name: string;
-  passed: boolean;
-  error?: string;
-  durationMs: number;
-};
+export type GpsTestResult = SerialTestResult;
 
 /** Progress hooks so a UI can render results live as each test completes. */
-export type GpsConformanceProgress = {
-  onStart?: (name: string, index: number, total: number) => void;
-  onResult?: (result: GpsTestResult) => void;
-};
-
-// ── tiny assertions (no test-runner dependency) ──────────────────────────────
-
-function assert(condition: unknown, message: string): asserts condition {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
-
-function errorMessage(e: unknown): string {
-  return e instanceof Error ? `${e.name}: ${e.message}` : String(e);
-}
+export type GpsConformanceProgress = SerialTestProgress;
 
 // ── sentence parsing ─────────────────────────────────────────────────────────
 
@@ -309,94 +297,41 @@ export const gpsConformanceTests: GpsConformanceTest[] = [
 
 // ── an NMEA line reader over a SerialPort ────────────────────────────────────
 
-class NmeaCollector {
-  readonly #reader: ReadableStreamDefaultReader<Uint8Array>;
-  #buffer = '';
+/**
+ * Read sentences off a {@link SerialClient} until `wantTypes` have all been seen
+ * (a full cycle) or `timeoutMs` elapses — fast for the emulator, ~1–2 s for real
+ * hardware. `SerialClient.readLine` does the line framing the collector used to
+ * hand-roll.
+ */
+async function collectSentences(
+  client: SerialClient,
+  options: {wantTypes: string[]; minSentences: number; timeoutMs: number},
+): Promise<NmeaSentence[]> {
+  const out: NmeaSentence[] = [];
+  const seen = new Set<string>();
+  const deadline = Date.now() + options.timeoutMs;
 
-  private constructor(reader: ReadableStreamDefaultReader<Uint8Array>) {
-    this.#reader = reader;
-  }
-
-  static async open(port: SerialPort, baudRate = 9600): Promise<NmeaCollector> {
-    await port.open({baudRate});
-    return new NmeaCollector(port.readable!.getReader());
-  }
-
-  /**
-   * Read sentences until `wantTypes` have all been seen (a full cycle) or
-   * `timeoutMs` elapses — fast for the emulator, ~1–2 s for real hardware.
-   */
-  async collect(options: {
-    wantTypes: string[];
-    minSentences: number;
-    timeoutMs: number;
-  }): Promise<NmeaSentence[]> {
-    const out: NmeaSentence[] = [];
-    const seen = new Set<string>();
-    const deadline = Date.now() + options.timeoutMs;
-
-    while (Date.now() < deadline) {
-      if (
-        out.length >= options.minSentences &&
-        options.wantTypes.every(t => seen.has(t))
-      ) {
-        break;
-      }
-      let chunk: {done: boolean; value?: Uint8Array};
-      try {
-        chunk = await this.#readWithin(deadline - Date.now());
-      } catch (e) {
-        if (e instanceof Error && e.message === 'read timeout') {
-          break;
-        }
-        throw e;
-      }
-      if (chunk.done) {
-        break;
-      }
-      if (chunk.value) {
-        for (const byte of chunk.value) {
-          this.#buffer += String.fromCharCode(byte);
-        }
-        let nl = this.#buffer.indexOf('\n');
-        while (nl >= 0) {
-          const line = this.#buffer.slice(0, nl);
-          this.#buffer = this.#buffer.slice(nl + 1);
-          const sentence = parseSentence(line);
-          if (sentence) {
-            out.push(sentence);
-            seen.add(sentence.type);
-          }
-          nl = this.#buffer.indexOf('\n');
-        }
-      }
+  while (Date.now() < deadline) {
+    if (
+      out.length >= options.minSentences &&
+      options.wantTypes.every(t => seen.has(t))
+    ) {
+      break;
     }
-    return out;
-  }
-
-  #readWithin(ms: number): Promise<{done: boolean; value?: Uint8Array}> {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('read timeout')), ms);
-      this.#reader.read().then(
-        r => {
-          clearTimeout(timer);
-          resolve(r);
-        },
-        e => {
-          clearTimeout(timer);
-          reject(e);
-        },
-      );
-    });
-  }
-
-  async close(): Promise<void> {
+    if (client.ended) break;
+    let line: string;
     try {
-      this.#reader.releaseLock();
+      line = await client.readLine({timeout: deadline - Date.now()});
     } catch {
-      // already released
+      break; // read timeout — return whatever was collected
+    }
+    const sentence = parseSentence(line);
+    if (sentence) {
+      out.push(sentence);
+      seen.add(sentence.type);
     }
   }
+  return out;
 }
 
 // ── runners ──────────────────────────────────────────────────────────────────
@@ -406,9 +341,9 @@ export async function runGpsConformance(
   port: SerialPort,
   progress?: GpsConformanceProgress,
 ): Promise<GpsTestResult[]> {
-  let collector: NmeaCollector;
+  const client = new SerialClient(port);
   try {
-    collector = await NmeaCollector.open(port);
+    await client.open({baudRate: 9600});
   } catch (e) {
     const result = {
       name: 'open serial port',
@@ -420,16 +355,11 @@ export async function runGpsConformance(
     return [result];
   }
 
-  let batch: NmeaSentence[] = [];
-  try {
-    batch = await collector.collect({
-      wantTypes: ['GGA', 'RMC', 'GSV', 'GSA'],
-      minSentences: 4,
-      timeoutMs: 5000,
-    });
-  } catch {
-    // fall through with whatever was collected — the checks will report it
-  }
+  const batch = await collectSentences(client, {
+    wantTypes: ['GGA', 'RMC', 'GSV', 'GSA'],
+    minSentences: 4,
+    timeoutMs: 5000,
+  });
 
   const results: GpsTestResult[] = [];
   const total = gpsConformanceTests.length;
@@ -453,8 +383,7 @@ export async function runGpsConformance(
     progress?.onResult?.(result);
   }
 
-  await collector.close().catch(() => {});
-  await port.close().catch(() => {});
+  await client.close().catch(() => {});
   return results;
 }
 
@@ -474,28 +403,11 @@ export async function makeVirtualGpsPort(): Promise<SerialPort> {
   return port;
 }
 
-/** Compare one device result against its simulator counterpart. */
-function compareOne(
-  sim: GpsTestResult | undefined,
-  real: GpsTestResult,
-): GpsTestResult {
-  const identical = !!sim && sim.passed === real.passed;
-  return {
-    name: real.name,
-    passed: identical,
-    error: identical
-      ? undefined
-      : `simulator ${sim ? (sim.passed ? 'passed' : 'failed') : 'has no such case'}, device ${
-          real.passed ? 'passed' : 'failed'
-        }${real.error ? `: ${real.error}` : ''}`,
-    durationMs: real.durationMs,
-  };
-}
-
 /**
  * Run the suite against `realPort` and against the emulator, returning one
  * result per case: `passed` means the real receiver behaved identically to the
- * emulator (both pass / both fail the same case).
+ * emulator (both pass / both fail the same case), via the shipped
+ * {@link compareResults}.
  */
 export async function compareGpsWithSimulator(
   realPort: SerialPort,
@@ -506,30 +418,11 @@ export async function compareGpsWithSimulator(
     0,
     gpsConformanceTests.length,
   );
-  const sim = await runGpsConformance(await makeVirtualGpsPort());
-  const simByName = new Map(sim.map(s => [s.name, s]));
-
-  const compared: GpsTestResult[] = [];
-  const real = await runGpsConformance(realPort, {
+  const reference = await runGpsConformance(await makeVirtualGpsPort());
+  const candidate = await runGpsConformance(realPort, {
     onStart: progress?.onStart,
-    onResult: r => {
-      const row = compareOne(simByName.get(r.name), r);
-      compared.push(row);
-      progress?.onResult?.(row);
-    },
   });
-
-  for (const s of sim) {
-    if (!real.some(r => r.name === s.name)) {
-      const row: GpsTestResult = {
-        name: s.name,
-        passed: false,
-        error: `simulator ${s.passed ? 'passed' : 'failed'}, device did not respond`,
-        durationMs: 0,
-      };
-      compared.push(row);
-      progress?.onResult?.(row);
-    }
-  }
+  const compared = compareResults(reference, candidate);
+  for (const row of compared) progress?.onResult?.(row);
   return compared;
 }

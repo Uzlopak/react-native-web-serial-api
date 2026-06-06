@@ -13,235 +13,32 @@
 
 import type {SerialPort} from 'react-native-web-serial-api';
 import {Serial} from 'react-native-web-serial-api';
-import {VirtualSerialTransport} from 'react-native-web-serial-api/testing';
-import {ByteReader} from './bytes';
 import {
-  DevMgmt,
-  DevStatus,
-  decodeHci,
-  encodeHci,
-  GwStatus,
-  type HciMessage,
-  Sap,
-  WMBus,
-} from './hci';
-import {SlipDecoder, slipEncode} from './slip';
+  assert,
+  assertEqual,
+  compareResults,
+  runSerialTests,
+  type SerialTest,
+  type SerialTestProgress,
+  type SerialTestResult,
+  VirtualSerialTransport,
+} from 'react-native-web-serial-api/testing';
+import {ByteReader} from './bytes';
+import {HciHost} from './HciHost';
+import {DevMgmt, DevStatus, GwStatus, Sap, WMBus} from './hci';
 import {WMBusGateway} from './WMBusGateway';
 import {WMBusMeter} from './WMBusMeter';
 
-export type WMBusTestResult = {
-  name: string;
-  passed: boolean;
-  error?: string;
-  durationMs: number;
-};
-
-// ── tiny assertions (no test-runner dependency) ──────────────────────────────
-
-function assert(condition: unknown, message: string): asserts condition {
-  if (!condition) throw new Error(message);
-}
-
-function assertEqual<T>(actual: T, expected: T, message: string): void {
-  if (actual !== expected) {
-    throw new Error(
-      `${message} (expected ${String(expected)}, got ${String(actual)})`,
-    );
-  }
-}
+export type WMBusTestResult = SerialTestResult;
 
 function isPrintableAscii(bytes: number[]): boolean {
   return bytes.every(b => b >= 0x20 && b <= 0x7e);
 }
 
-function errorMessage(e: unknown): string {
-  return e instanceof Error ? `${e.name}: ${e.message}` : String(e);
-}
-
-// ── an HCI request/response client over a SerialPort ─────────────────────────
-
-class HciClient {
-  readonly #reader: ReadableStreamDefaultReader<Uint8Array>;
-  readonly #writer: WritableStreamDefaultWriter<Uint8Array>;
-  readonly #dec = new SlipDecoder();
-  readonly #pending: HciMessage[] = [];
-
-  private constructor(
-    reader: ReadableStreamDefaultReader<Uint8Array>,
-    writer: WritableStreamDefaultWriter<Uint8Array>,
-  ) {
-    this.#reader = reader;
-    this.#writer = writer;
-  }
-
-  static async open(port: SerialPort, baudRate = 115200): Promise<HciClient> {
-    await port.open({baudRate});
-    return new HciClient(
-      port.readable!.getReader(),
-      port.writable!.getWriter(),
-    );
-  }
-
-  async send(sap: number, msg: number, payload: number[] = []): Promise<void> {
-    await this.#writer.write(
-      Uint8Array.from(slipEncode(encodeHci(sap, msg, payload))),
-    );
-  }
-
-  /** Send a request and wait for the matching response, skipping any events. */
-  async request(
-    sap: number,
-    reqMsg: number,
-    payload: number[],
-    rspMsg: number,
-    timeoutMs = 2000,
-    onSkipped?: (message: HciMessage) => void,
-  ): Promise<HciMessage> {
-    await this.send(sap, reqMsg, payload);
-    const deadline = Date.now() + timeoutMs;
-    while (true) {
-      while (this.#pending.length > 0) {
-        const m = this.#pending.shift() as HciMessage;
-        if (m.sap === sap && m.msg === rspMsg) return m;
-        // otherwise it's an unsolicited event (telegram/tx-notify) — ignore
-        onSkipped?.(m);
-      }
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) {
-        throw new Error(
-          `timed out waiting for response 0x${sap.toString(16)}/0x${rspMsg.toString(16)}`,
-        );
-      }
-      let chunk: {done: boolean; value?: Uint8Array};
-      try {
-        chunk = await this.#readWithin(remaining);
-      } catch (e) {
-        // A bare read timeout means the budget elapsed with no bytes — loop so the
-        // deadline check above reports a meaningful message-level timeout instead.
-        if (e instanceof Error && e.message === 'read timeout') continue;
-        throw e;
-      }
-      if (chunk.done) throw new Error('serial stream closed');
-      if (chunk.value) {
-        for (const frame of this.#dec.push(chunk.value)) {
-          const decoded = decodeHci(frame);
-          if (decoded) this.#pending.push(decoded);
-        }
-      }
-    }
-  }
-
-  /** Wait for a specific message (typically an event), skipping all others. */
-  async waitFor(
-    sap: number,
-    msg: number,
-    timeoutMs = 5000,
-    predicate?: (message: HciMessage) => boolean,
-  ): Promise<HciMessage> {
-    const deadline = Date.now() + timeoutMs;
-    while (true) {
-      while (this.#pending.length > 0) {
-        const m = this.#pending.shift() as HciMessage;
-        if (m.sap === sap && m.msg === msg && (!predicate || predicate(m)))
-          return m;
-      }
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) {
-        throw new Error(
-          `timed out waiting for message 0x${sap.toString(16)}/0x${msg.toString(16)}`,
-        );
-      }
-      let chunk: {done: boolean; value?: Uint8Array};
-      try {
-        chunk = await this.#readWithin(remaining);
-      } catch (e) {
-        if (e instanceof Error && e.message === 'read timeout') continue;
-        throw e;
-      }
-      if (chunk.done) throw new Error('serial stream closed');
-      if (chunk.value) {
-        for (const frame of this.#dec.push(chunk.value)) {
-          const decoded = decodeHci(frame);
-          if (decoded) this.#pending.push(decoded);
-        }
-      }
-    }
-  }
-
-  /** Assert a message does NOT occur for the entire timeout window. */
-  async expectNoMessage(
-    sap: number,
-    msg: number,
-    timeoutMs = 5000,
-    predicate?: (message: HciMessage) => boolean,
-  ): Promise<void> {
-    const deadline = Date.now() + timeoutMs;
-    // Keep a floor so the final ping always has enough budget to complete on a
-    // real serial link; otherwise a ping round-trip near the deadline would
-    // surface as a spurious `read timeout` and fail the assertion.
-    while (deadline - Date.now() > 500) {
-      const remaining = deadline - Date.now();
-      try {
-        await this.request(
-          Sap.DevMgmt,
-          DevMgmt.PingReq,
-          [],
-          DevMgmt.PingRsp,
-          Math.min(remaining, 1500),
-          m => {
-            if (
-              m.sap === sap &&
-              m.msg === msg &&
-              (!predicate || predicate(m))
-            ) {
-              throw new Error(
-                `unexpected message 0x${sap.toString(16)}/0x${msg.toString(16)} received`,
-              );
-            }
-          },
-        );
-      } catch (e) {
-        // Only the "unexpected message" assertion should fail this check; a slow
-        // or dropped ping (real serial latency) is tolerated — we keep observing.
-        if (e instanceof Error && e.message.startsWith('unexpected message')) {
-          throw e;
-        }
-      }
-    }
-  }
-
-  #readWithin(ms: number): Promise<{done: boolean; value?: Uint8Array}> {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('read timeout')), ms);
-      this.#reader.read().then(
-        r => {
-          clearTimeout(timer);
-          resolve(r);
-        },
-        e => {
-          clearTimeout(timer);
-          reject(e);
-        },
-      );
-    });
-  }
-
-  async close(): Promise<void> {
-    try {
-      this.#reader.releaseLock();
-      this.#writer.releaseLock();
-    } catch {
-      // already released
-    }
-  }
-}
-
 // ── the suite ────────────────────────────────────────────────────────────────
 
-export type WMBusConformanceTest = {
-  name: string;
-  run(client: HciClient): Promise<void>;
-};
+/** A conformance case driving the gateway through an {@link HciHost}. */
+export type WMBusConformanceTest = SerialTest<HciHost>;
 
 function readDeviceListRaw(payload: number[]): number[] {
   // ReadDeviceListRsp = status(1) + N×item(24); return the raw item bytes.
@@ -252,7 +49,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
   {
     name: 'Ping answers with status ok',
     async run(c) {
-      const rsp = await c.request(
+      const rsp = await c.exchange(
         Sap.DevMgmt,
         DevMgmt.PingReq,
         [],
@@ -264,7 +61,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
   {
     name: 'Get Device Information returns a module type + id',
     async run(c) {
-      const {payload} = await c.request(
+      const {payload} = await c.exchange(
         Sap.DevMgmt,
         DevMgmt.GetDeviceInfoReq,
         [],
@@ -281,7 +78,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
   {
     name: 'Get Firmware Information returns version, build date and name',
     async run(c) {
-      const {payload} = await c.request(
+      const {payload} = await c.exchange(
         Sap.DevMgmt,
         DevMgmt.GetFwInfoReq,
         [],
@@ -309,7 +106,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
     async run(c) {
       const original = new ByteReader(
         (
-          await c.request(
+          await c.exchange(
             Sap.DevMgmt,
             DevMgmt.GetDateTimeReq,
             [],
@@ -321,7 +118,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
       const prev = original.u32le();
 
       const probe = 0x5f649e19;
-      const set = await c.request(
+      const set = await c.exchange(
         Sap.DevMgmt,
         DevMgmt.SetDateTimeReq,
         [
@@ -336,7 +133,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
 
       const got = new ByteReader(
         (
-          await c.request(
+          await c.exchange(
             Sap.DevMgmt,
             DevMgmt.GetDateTimeReq,
             [],
@@ -352,7 +149,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
       );
 
       // restore
-      await c.request(
+      await c.exchange(
         Sap.DevMgmt,
         DevMgmt.SetDateTimeReq,
         [
@@ -368,7 +165,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
   {
     name: 'Get System Options returns a 32-bit field',
     async run(c) {
-      const {payload} = await c.request(
+      const {payload} = await c.exchange(
         Sap.DevMgmt,
         DevMgmt.GetSystemOptionsReq,
         [],
@@ -383,7 +180,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
     async run(c) {
       const get = async () =>
         (
-          await c.request(
+          await c.exchange(
             Sap.WMBus,
             WMBus.GetActiveConfigReq,
             [],
@@ -397,7 +194,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
 
       const modified = [...config];
       modified[0] = modified[0] === 0x02 ? 0x01 : 0x02; // flip link mode
-      const set = await c.request(
+      const set = await c.exchange(
         Sap.WMBus,
         WMBus.SetActiveConfigReq,
         modified,
@@ -409,7 +206,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
       assertEqual(after[0], modified[0], 'link mode should reflect the change');
 
       // restore the original active configuration
-      await c.request(
+      await c.exchange(
         Sap.WMBus,
         WMBus.SetActiveConfigReq,
         config,
@@ -420,7 +217,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
   {
     name: 'Get Default Configuration returns an 11-byte config',
     async run(c) {
-      const {payload} = await c.request(
+      const {payload} = await c.exchange(
         Sap.WMBus,
         WMBus.GetDefaultConfigReq,
         [],
@@ -436,7 +233,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
       // snapshot the current RAM list
       const before = readDeviceListRaw(
         (
-          await c.request(
+          await c.exchange(
             Sap.WMBus,
             WMBus.ReadDeviceListReq,
             [0, 10],
@@ -445,7 +242,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
         ).payload,
       );
 
-      await c.request(
+      await c.exchange(
         Sap.WMBus,
         WMBus.ClearDeviceListReq,
         [],
@@ -463,7 +260,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
         0x07, // version, type
         ...new Array(16).fill(0xaa), // key
       ];
-      const append = await c.request(
+      const append = await c.exchange(
         Sap.WMBus,
         WMBus.AppendDeviceListReq,
         item,
@@ -475,7 +272,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
 
       const read = readDeviceListRaw(
         (
-          await c.request(
+          await c.exchange(
             Sap.WMBus,
             WMBus.ReadDeviceListReq,
             [0, 10],
@@ -491,14 +288,14 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
       );
 
       // restore the original RAM list
-      await c.request(
+      await c.exchange(
         Sap.WMBus,
         WMBus.ClearDeviceListReq,
         [],
         WMBus.ClearDeviceListRsp,
       );
       if (before.length >= 24) {
-        await c.request(
+        await c.exchange(
           Sap.WMBus,
           WMBus.AppendDeviceListReq,
           before,
@@ -516,7 +313,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
         for (let index = 0; index < 0x100; index += 8) {
           const page = readDeviceListRaw(
             (
-              await c.request(
+              await c.exchange(
                 Sap.WMBus,
                 WMBus.ReadDeviceListReq,
                 [index, 8],
@@ -548,7 +345,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
       };
 
       const before = await readAll();
-      await c.request(
+      await c.exchange(
         Sap.WMBus,
         WMBus.ClearDeviceListReq,
         [],
@@ -565,7 +362,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
         for (let b = 0; b < MAX_BATCHES; b++) {
           const items: number[] = [];
           for (let i = 0; i < BATCH; i++) items.push(...makeItem());
-          const rsp = await c.request(
+          const rsp = await c.exchange(
             Sap.WMBus,
             WMBus.AppendDeviceListReq,
             items,
@@ -603,14 +400,14 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
         );
       } finally {
         // restore the original RAM list
-        await c.request(
+        await c.exchange(
           Sap.WMBus,
           WMBus.ClearDeviceListReq,
           [],
           WMBus.ClearDeviceListRsp,
         );
         if (before.length >= 24) {
-          await c.request(
+          await c.exchange(
             Sap.WMBus,
             WMBus.AppendDeviceListReq,
             before,
@@ -623,7 +420,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
   {
     name: 'Gateway Status Report matches the IMST host layout',
     async run(c) {
-      const {payload} = await c.request(
+      const {payload} = await c.exchange(
         Sap.WMBus,
         WMBus.GetStatusReportReq,
         [],
@@ -659,7 +456,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
     async run(c) {
       const getConfig = async () =>
         (
-          await c.request(
+          await c.exchange(
             Sap.WMBus,
             WMBus.GetActiveConfigReq,
             [],
@@ -674,7 +471,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
 
       const modified = [...config];
       modified[0] = 0x02; // T-Mode
-      await c.request(
+      await c.exchange(
         Sap.WMBus,
         WMBus.SetActiveConfigReq,
         modified,
@@ -720,7 +517,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
           'L-field should match packet length',
         );
       } finally {
-        await c.request(
+        await c.exchange(
           Sap.WMBus,
           WMBus.SetActiveConfigReq,
           config,
@@ -732,7 +529,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
   {
     name: 'Get Operation Mode returns Application or Approval mode',
     async run(c) {
-      const {payload} = await c.request(
+      const {payload} = await c.exchange(
         Sap.DevMgmt,
         DevMgmt.GetOpModeReq,
         [],
@@ -748,7 +545,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
   {
     name: 'Get WM-Bus Address returns the stored 8-byte sender address',
     async run(c) {
-      const {payload} = await c.request(
+      const {payload} = await c.exchange(
         Sap.WMBus,
         WMBus.GetWMBusAddressReq,
         [],
@@ -761,7 +558,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
   {
     name: 'Reset Gateway Status Report succeeds',
     async run(c) {
-      const {payload} = await c.request(
+      const {payload} = await c.exchange(
         Sap.WMBus,
         WMBus.ResetStatusReportReq,
         [],
@@ -774,7 +571,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
     name: 'Radio Control Config is not supported on iU sticks (module-gated)',
     async run(c) {
       try {
-        const {payload} = await c.request(
+        const {payload} = await c.exchange(
           Sap.WMBus,
           WMBus.GetRadioConfigReq,
           [],
@@ -797,7 +594,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
     name: 'Receives a Scan Mode notification (0x24) across all link modes',
     async run(c) {
       // Scan S+T+CT+C (bitmask 0x0F), 5s per mode.
-      const set = await c.request(
+      const set = await c.exchange(
         Sap.WMBus,
         WMBus.SetScanModeReq,
         [0x0f, 0x05, 0x00],
@@ -825,7 +622,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
           'scan notification should carry a 10-byte link-layer header',
         );
       } finally {
-        await c.request(
+        await c.exchange(
           Sap.WMBus,
           WMBus.SetScanModeReq,
           [0x00, 0x00, 0x00],
@@ -853,7 +650,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
         0x02,
         0x03, // a little application data
       ];
-      const rsp = await c.request(
+      const rsp = await c.exchange(
         Sap.WMBus,
         WMBus.SendMessageReq,
         [0x02 /* T-Mode, Format A */, 0x00 /* power 0 dBm */, ...content],
@@ -884,7 +681,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
     async run(c) {
       const getConfig = async () =>
         (
-          await c.request(
+          await c.exchange(
             Sap.WMBus,
             WMBus.GetActiveConfigReq,
             [],
@@ -899,7 +696,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
 
       const enabled = [...config];
       enabled[0] = 0x02; // T-Mode ON
-      await c.request(
+      await c.exchange(
         Sap.WMBus,
         WMBus.SetActiveConfigReq,
         enabled,
@@ -917,7 +714,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
 
         const disabled = [...enabled];
         disabled[0] = 0x00; // Link Mode Off => receiver off
-        await c.request(
+        await c.exchange(
           Sap.WMBus,
           WMBus.SetActiveConfigReq,
           disabled,
@@ -927,7 +724,7 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
         // Once listening is disabled there should be no new Rx telegram events.
         await c.expectNoMessage(Sap.WMBus, WMBus.RxMessageInd, 10000);
       } finally {
-        await c.request(
+        await c.exchange(
           Sap.WMBus,
           WMBus.SetActiveConfigReq,
           config,
@@ -941,57 +738,24 @@ export const wmbusConformanceTests: WMBusConformanceTest[] = [
 // ── runners ──────────────────────────────────────────────────────────────────
 
 /** Progress hooks so a UI can render results live as each test completes. */
-export type ConformanceProgress = {
-  /** Called just before a test starts running. */
-  onStart?: (name: string, index: number, total: number) => void;
-  /** Called after each test completes (pass or fail). */
-  onResult?: (result: WMBusTestResult) => void;
-};
+export type ConformanceProgress = SerialTestProgress;
 
-/** Run the full suite against an already-acquired port (opens & closes it). */
-export async function runWMBusConformance(
+/**
+ * Run the full suite against an already-acquired port (opens & closes it). The
+ * shipped {@link runSerialTests} drives one shared {@link HciHost} across every
+ * case and collects a result per test without throwing.
+ */
+export function runWMBusConformance(
   port: SerialPort,
-  progress?: ConformanceProgress,
+  progress?: SerialTestProgress,
 ): Promise<WMBusTestResult[]> {
-  let client: HciClient;
-  try {
-    client = await HciClient.open(port);
-  } catch (e) {
-    const result = {
-      name: 'open serial port',
-      passed: false,
-      error: errorMessage(e),
-      durationMs: 0,
-    };
-    progress?.onResult?.(result);
-    return [result];
-  }
-
-  const results: WMBusTestResult[] = [];
-  const total = wmbusConformanceTests.length;
-  for (let i = 0; i < total; i++) {
-    const test = wmbusConformanceTests[i];
-    progress?.onStart?.(test.name, i, total);
-    const start = Date.now();
-    let result: WMBusTestResult;
-    try {
-      await test.run(client);
-      result = {name: test.name, passed: true, durationMs: Date.now() - start};
-    } catch (e) {
-      result = {
-        name: test.name,
-        passed: false,
-        error: errorMessage(e),
-        durationMs: Date.now() - start,
-      };
-    }
-    results.push(result);
-    progress?.onResult?.(result);
-  }
-
-  await client.close().catch(() => {});
-  await port.close().catch(() => {});
-  return results;
+  return runSerialTests(wmbusConformanceTests, port, {
+    client: {
+      connect: p => HciHost.open(p),
+      disconnect: host => host.close(),
+    },
+    progress,
+  });
 }
 
 /** A fresh virtual gateway port — the reference the real device is compared to. */
@@ -1020,33 +784,15 @@ export async function makeVirtualGatewayPort(): Promise<SerialPort> {
   return port;
 }
 
-/** Compare one device result against its simulator counterpart. */
-function compareOne(
-  sim: WMBusTestResult | undefined,
-  real: WMBusTestResult,
-): WMBusTestResult {
-  const identical = !!sim && sim.passed === real.passed;
-  return {
-    name: real.name,
-    passed: identical,
-    error: identical
-      ? undefined
-      : `simulator ${sim ? (sim.passed ? 'passed' : 'failed') : 'has no such case'}, device ${
-          real.passed ? 'passed' : 'failed'
-        }${real.error ? `: ${real.error}` : ''}`,
-    durationMs: real.durationMs,
-  };
-}
-
 /**
  * Run the suite against `realPort` and against the simulator, returning one
  * result per case: `passed` means the real device behaved identically to the
- * simulator (both pass / both fail the same case). The comparison rows stream
- * via `progress.onResult` as the (slow) real-device tests complete.
+ * simulator (both pass / both fail the same case). The real device's progress
+ * streams via `progress.onStart`; the comparison rows are emitted once it ends.
  */
 export async function compareWithSimulator(
   realPort: SerialPort,
-  progress?: ConformanceProgress,
+  progress?: SerialTestProgress,
 ): Promise<WMBusTestResult[]> {
   // Phase 1: the simulator reference (fast).
   progress?.onStart?.(
@@ -1054,72 +800,14 @@ export async function compareWithSimulator(
     0,
     wmbusConformanceTests.length,
   );
-  const sim = await runWMBusConformance(await makeVirtualGatewayPort());
-  const simByName = new Map(sim.map(s => [s.name, s]));
+  const reference = await runWMBusConformance(await makeVirtualGatewayPort());
 
-  // Phase 2: the real device — stream each comparison as the test ends.
-  const compared: WMBusTestResult[] = [];
-  const real = await runWMBusConformance(realPort, {
+  // Phase 2: the (slow) real device — surface its progress as each test runs,
+  // then compare with the shipped helper.
+  const candidate = await runWMBusConformance(realPort, {
     onStart: progress?.onStart,
-    onResult: r => {
-      const row = compareOne(simByName.get(r.name), r);
-      compared.push(row);
-      progress?.onResult?.(row);
-    },
   });
-
-  // Surface any simulator cases the device never produced a result for.
-  for (const s of sim) {
-    if (!real.some(r => r.name === s.name)) {
-      const row: WMBusTestResult = {
-        name: s.name,
-        passed: false,
-        error: `simulator ${s.passed ? 'passed' : 'failed'}, device did not respond`,
-        durationMs: 0,
-      };
-      compared.push(row);
-      progress?.onResult?.(row);
-    }
-  }
-  return compared;
-}
-
-/**
- * Compare two conformance runs case-by-case.
- *
- * A case is considered passed when both runs behaved identically
- * (both passed or both failed), so this helper can be used for simulator
- * equivalence checks.
- */
-export function compareConformanceResults(
-  simulatorResults: WMBusTestResult[],
-  deviceResults: WMBusTestResult[],
-): WMBusTestResult[] {
-  const realByName = new Map(deviceResults.map(r => [r.name, r]));
-
-  const deviceOnly = deviceResults
-    .filter(r => !simulatorResults.some(s => s.name === r.name))
-    .map(r => ({
-      name: `device: ${r.name}`,
-      passed: false,
-      error: r.error ?? 'device produced an unexpected result',
-      durationMs: r.durationMs,
-    }));
-
-  const compared = simulatorResults.map(s => {
-    const r = realByName.get(s.name);
-    const identical = !!r && r.passed === s.passed;
-    return {
-      name: s.name,
-      passed: identical,
-      error: identical
-        ? undefined
-        : `simulator ${s.passed ? 'passed' : 'failed'}, device ${
-            r ? (r.passed ? 'passed' : 'failed') : 'did not respond'
-          }${r?.error ? `: ${r.error}` : ''}`,
-      durationMs: r?.durationMs ?? 0,
-    };
-  });
-
-  return [...deviceOnly, ...compared];
+  const rows = compareResults(reference, candidate);
+  for (const row of rows) progress?.onResult?.(row);
+  return rows;
 }

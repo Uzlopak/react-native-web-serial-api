@@ -5,8 +5,8 @@
  * it is the reference a real device is compared to on the Self Test screen.
  */
 import {describe, expect, it} from '@jest/globals';
+import {compareResults} from 'react-native-web-serial-api/testing';
 import {
-  compareConformanceResults,
   compareWithSimulator,
   makeVirtualGatewayPort,
   runWMBusConformance,
@@ -29,7 +29,7 @@ describe('WM-Bus gateway conformance suite', () => {
   }, 60000);
 
   it('treats matching pass/fail outcomes as identical', () => {
-    const compared = compareConformanceResults(
+    const compared = compareResults(
       [
         {name: 'A', passed: true, durationMs: 1},
         {name: 'B', passed: false, error: 'sim failed', durationMs: 2},
@@ -47,7 +47,7 @@ describe('WM-Bus gateway conformance suite', () => {
   });
 
   it('reports mismatches and unexpected device-only cases', () => {
-    const compared = compareConformanceResults(
+    const compared = compareResults(
       [{name: 'A', passed: true, durationMs: 1}],
       [
         {name: 'A', passed: false, error: 'timeout', durationMs: 5},
@@ -57,14 +57,14 @@ describe('WM-Bus gateway conformance suite', () => {
 
     expect(compared).toHaveLength(2);
     expect(compared[0]).toEqual({
-      name: 'device: X',
+      name: 'candidate: X',
       passed: false,
-      error: 'device produced an unexpected result',
+      error: 'candidate produced an unexpected result',
       durationMs: 6,
     });
     expect(compared[1]?.name).toBe('A');
     expect(compared[1]?.passed).toBe(false);
-    expect(compared[1]?.error).toContain('simulator passed, device failed');
+    expect(compared[1]?.error).toContain('reference passed, candidate failed');
     expect(compared[1]?.error).toContain('timeout');
   });
 });

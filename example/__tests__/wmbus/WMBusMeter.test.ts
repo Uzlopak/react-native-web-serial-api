@@ -6,20 +6,11 @@
  * has switched the receiver on (Set Active Configuration with a link mode).
  */
 import {afterEach, beforeEach, describe, expect, it, jest} from '@jest/globals';
-import type {SerialPort} from 'react-native-web-serial-api';
-import {Serial} from 'react-native-web-serial-api';
-import {VirtualSerialTransport} from 'react-native-web-serial-api/testing';
+import {mountSerialDevice} from 'react-native-web-serial-api/testing';
 import {ByteReader} from '../../src/devices/wmbus/bytes';
 import {readAddress} from '../../src/devices/wmbus/frame';
-import {
-  DevMgmt,
-  decodeHci,
-  encodeHci,
-  type HciMessage,
-  Sap,
-  WMBus,
-} from '../../src/devices/wmbus/hci';
-import {SlipDecoder, slipEncode} from '../../src/devices/wmbus/slip';
+import {HciHost} from '../../src/devices/wmbus/HciHost';
+import {DevMgmt, Sap, WMBus} from '../../src/devices/wmbus/hci';
 import {WMBusGateway} from '../../src/devices/wmbus/WMBusGateway';
 import {WMBusMeter} from '../../src/devices/wmbus/WMBusMeter';
 
@@ -28,58 +19,9 @@ const ENABLE_T_MODE = [
   0x02, 0x0e, 0x00, 0x00, 0x00, 0x32, 0x00, 0x88, 0x13, 0x00, 0x00,
 ];
 
-class Host {
-  #reader: ReadableStreamDefaultReader<Uint8Array>;
-  #writer: WritableStreamDefaultWriter<Uint8Array>;
-  readonly #dec = new SlipDecoder();
-  readonly #pending: HciMessage[] = [];
-
-  constructor(
-    reader: ReadableStreamDefaultReader<Uint8Array>,
-    writer: WritableStreamDefaultWriter<Uint8Array>,
-  ) {
-    this.#reader = reader;
-    this.#writer = writer;
-  }
-
-  async send(sap: number, msg: number, payload: number[] = []): Promise<void> {
-    await this.#writer.write(
-      Uint8Array.from(slipEncode(encodeHci(sap, msg, payload))),
-    );
-  }
-
-  async recv(): Promise<HciMessage> {
-    while (this.#pending.length === 0) {
-      const {value, done} = await this.#reader.read();
-      if (done) throw new Error('stream closed');
-      if (value) {
-        for (const frame of this.#dec.push(value)) {
-          const m = decodeHci(frame);
-          if (m) this.#pending.push(m);
-        }
-      }
-    }
-    return this.#pending.shift() as HciMessage;
-  }
-
-  async request(
-    sap: number,
-    msg: number,
-    payload: number[] = [],
-  ): Promise<HciMessage> {
-    await this.send(sap, msg, payload);
-    return this.recv();
-  }
-
-  async enableReceiver(): Promise<void> {
-    await this.request(Sap.WMBus, WMBus.SetActiveConfigReq, ENABLE_T_MODE);
-  }
-
-  release(): void {
-    this.#reader.releaseLock();
-    this.#writer.releaseLock();
-  }
-}
+/** Switch the gateway's receiver on (T-Mode) so meter telegrams are forwarded. */
+const enableReceiver = (host: HciHost): Promise<unknown> =>
+  host.request(Sap.WMBus, WMBus.SetActiveConfigReq, ENABLE_T_MODE);
 
 const ADDRESS = {
   manufacturerId: 0x1234,
@@ -88,30 +30,24 @@ const ADDRESS = {
   type: 0x07,
 };
 
+/** Mount a gateway simulator and an {@link HciHost} acting as the host app. */
 async function mount() {
-  const transport = new VirtualSerialTransport();
   const gateway = new WMBusGateway('iU891A-XL');
-  transport.addDevice(gateway, {hasPermission: true});
-  const serial = new Serial(transport);
-  const [port] = await serial.getPorts();
-  if (!port) throw new Error('expected one port');
-  await port.open({baudRate: 115200});
-  const host = new Host(port.readable!.getReader(), port.writable!.getWriter());
-  return {gateway, port, host};
+  const {port} = await mountSerialDevice(gateway);
+  const host = await HciHost.open(port);
+  return {gateway, host};
 }
 
 describe('WMBusMeter → WMBusGateway 0x20 events', () => {
-  let port: SerialPort;
-  let host: Host;
+  let host: HciHost;
   let gateway: WMBusGateway;
 
   beforeEach(async () => {
-    ({gateway, port, host} = await mount());
+    ({gateway, host} = await mount());
   });
 
   afterEach(async () => {
-    host.release();
-    await port.close();
+    await host.close();
   });
 
   it('does not forward telegrams until the receiver is switched on', async () => {
@@ -127,7 +63,7 @@ describe('WMBusMeter → WMBusGateway 0x20 events', () => {
   });
 
   it('forwards an encrypted telegram (decryption ok) once enabled', async () => {
-    await host.enableReceiver();
+    await enableReceiver(host);
     const meter = new WMBusMeter({
       address: ADDRESS,
       encryptionKey: new Array(16).fill(0xaa),
@@ -176,7 +112,7 @@ describe('WMBusMeter → WMBusGateway 0x20 events', () => {
   });
 
   it('reports decryption status "not encrypted" for a key-less meter', async () => {
-    await host.enableReceiver();
+    await enableReceiver(host);
     const meter = new WMBusMeter({address: ADDRESS, payloadTemplate: [0x01]});
     gateway.addMeter(meter);
     meter.sendTelegram();
@@ -192,7 +128,7 @@ describe('WMBusMeter → WMBusGateway 0x20 events', () => {
     // microtask-based delivery still flushes on `await`.
     jest.useFakeTimers({doNotFake: ['queueMicrotask']});
     try {
-      await host.enableReceiver();
+      await enableReceiver(host);
       const meter = new WMBusMeter({
         address: ADDRESS,
         intervalMs: 1000,

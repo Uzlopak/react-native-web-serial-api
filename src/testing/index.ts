@@ -17,9 +17,39 @@ export type {SerialTransport} from '../transport';
 // The injection seam, re-exported here for convenience so a test or the
 // example's demo mode can flip the global transport from one import.
 export {getUsbSerial, resetUsbSerial, setUsbSerial} from '../UsbSerial';
+// Expose a device simulator over a WebSocket so a real app/emulator can connect
+// to it (same device suite in Jest and on-device). Lazy `ws`, Node-only.
+export type {
+  ExposedSerialDevice,
+  ExposeSerialDeviceOptions,
+  WebSocketServerCtor,
+  WebSocketServerLike,
+} from './expose';
+export {exposeSerialDevice} from './expose';
+// Dependency-free assertion/stream helpers for writing serial tests.
+export type {ByteReader, RejectionExpectation} from './harness';
+export {
+  assert,
+  assertEqual,
+  assertRejects,
+  bytesEqual,
+  errorMessage,
+  readBytes,
+  withTimeout,
+} from './harness';
 export type {InstallSerialMockOptions, SerialMockDevice} from './install';
 // Inject a mock device set into a running app (for on-device / emulator E2E).
 export {installSerialMock} from './install';
+// One-call fixture: mount a device sim + drive both sides + await connect.
+export type {
+  MountedSerialDevice,
+  MountedSerialDevices,
+  MountSerialDeviceOptions,
+} from './mount';
+export {mountSerialDevice} from './mount';
+// The fluent host-side client (reader/writer/readBytes/readUntil/readLine/…).
+export type {ReadOptions, SerialClientOptions} from './serial-client';
+export {createSerialClient, SerialClient} from './serial-client';
 export type {
   DeviceIdentity,
   SerialDeviceHost,
@@ -34,6 +64,15 @@ export {
   SerialDevice,
   SilentDevice,
 } from './serial-device';
+// Runtime-agnostic suite runner: one suite, run in Jest + on-device + compare.
+export type {
+  RunSerialTestsOptions,
+  SerialTest,
+  SerialTestClient,
+  SerialTestProgress,
+  SerialTestResult,
+} from './suite';
+export {compareResults, runSerialTests} from './suite';
 export type {
   FailableOp,
   VirtualSerialDeviceOptions,

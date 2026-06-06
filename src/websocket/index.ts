@@ -4,11 +4,17 @@
  *   import {WebSocketSerialTransport}
  *     from 'react-native-web-serial-api/websocket';
  *
- * Client side only — the Node bridge that backs it is shipped as the
- * `expose-serial-websocket` binary (see `bin/expose-serial.js`). The wire
- * protocol is in {@link ./protocol}; the bridge core in {@link ./bridge}.
+ * Client side: `WebSocketSerialTransport` connects an app to a remote serial
+ * port. Server side: {@link attachBridge} pipes a WebSocket to a serial port,
+ * and {@link serialDeviceToSerialLike} lets that "serial port" be an in-memory
+ * {@link SerialDevice} simulator (used by `testing/exposeSerialDevice`). The
+ * wire protocol is in {@link ./protocol}; the bridge core in {@link ./bridge}.
  */
 
+// The bridge core + the in-memory device adapter, so a test can expose a
+// SerialDevice simulator over a WebSocket (see testing/exposeSerialDevice).
+export type {BridgeOptions, SerialLike, WsLike} from './bridge';
+export {attachBridge} from './bridge';
 export type {
   CommandMessage,
   CommandName,
@@ -20,6 +26,10 @@ export type {
   PortInfo,
   ResponseMessage,
 } from './protocol';
+export {
+  portInfoFromDevice,
+  serialDeviceToSerialLike,
+} from './serial-device-bridge';
 export type {
   WebSocketCtor,
   WebSocketLike,

@@ -6,15 +6,12 @@
  * exactly as a host app would.
  */
 import {afterEach, beforeEach, describe, expect, it, jest} from '@jest/globals';
-import type {SerialPort} from 'react-native-web-serial-api';
-import {Serial} from 'react-native-web-serial-api';
-import {VirtualSerialTransport} from 'react-native-web-serial-api/testing';
+import {mountSerialDevice} from 'react-native-web-serial-api/testing';
 import {ByteReader} from '../../src/devices/wmbus/bytes';
+import {HciHost} from '../../src/devices/wmbus/HciHost';
 import {
   ApprovalTest,
   DevMgmt,
-  decodeHci,
-  encodeHci,
   GwStatus,
   type HciMessage,
   Sap,
@@ -26,87 +23,27 @@ import {
   encodeDeviceItem,
   MAX_DEVICE_LIST_ITEMS,
 } from '../../src/devices/wmbus/nvm';
-import {SlipDecoder, slipEncode} from '../../src/devices/wmbus/slip';
+import {slipEncode} from '../../src/devices/wmbus/slip';
 import {WMBusGateway} from '../../src/devices/wmbus/WMBusGateway';
 
 const ascii = (b: number[]): string => String.fromCharCode(...b);
 
-/** A tiny host: frames requests, collects framed responses/events. */
-class Host {
-  #reader: ReadableStreamDefaultReader<Uint8Array>;
-  #writer: WritableStreamDefaultWriter<Uint8Array>;
-  readonly #dec = new SlipDecoder();
-  readonly #pending: HciMessage[] = [];
-
-  constructor(
-    reader: ReadableStreamDefaultReader<Uint8Array>,
-    writer: WritableStreamDefaultWriter<Uint8Array>,
-  ) {
-    this.#reader = reader;
-    this.#writer = writer;
-  }
-
-  async raw(bytes: number[]): Promise<void> {
-    await this.#writer.write(Uint8Array.from(bytes));
-  }
-
-  async send(sap: number, msg: number, payload: number[] = []): Promise<void> {
-    await this.#writer.write(
-      Uint8Array.from(slipEncode(encodeHci(sap, msg, payload))),
-    );
-  }
-
-  async recv(): Promise<HciMessage> {
-    while (this.#pending.length === 0) {
-      const {value, done} = await this.#reader.read();
-      if (done) throw new Error('stream closed');
-      if (value) {
-        for (const frame of this.#dec.push(value)) {
-          const m = decodeHci(frame);
-          if (m) this.#pending.push(m);
-        }
-      }
-    }
-    return this.#pending.shift() as HciMessage;
-  }
-
-  async request(
-    sap: number,
-    msg: number,
-    payload: number[] = [],
-  ): Promise<HciMessage> {
-    await this.send(sap, msg, payload);
-    return this.recv();
-  }
-
-  release(): void {
-    this.#reader.releaseLock();
-    this.#writer.releaseLock();
-  }
-}
-
+/** Mount a gateway simulator and an {@link HciHost} talking to it (host = app). */
 async function mount(variant: ModuleVariant = 'iU891A-XL') {
-  const transport = new VirtualSerialTransport();
-  transport.addDevice(new WMBusGateway(variant), {hasPermission: true});
-  const serial = new Serial(transport);
-  const [port] = await serial.getPorts();
-  if (!port) throw new Error('expected one port');
-  await port.open({baudRate: 115200});
-  const host = new Host(port.readable!.getReader(), port.writable!.getWriter());
-  return {transport, port, host};
+  const {port} = await mountSerialDevice(new WMBusGateway(variant));
+  const host = await HciHost.open(port);
+  return {host};
 }
 
 describe('WMBusGateway — Device Management', () => {
-  let port: SerialPort;
-  let host: Host;
+  let host: HciHost;
 
   beforeEach(async () => {
-    ({port, host} = await mount());
+    ({host} = await mount());
   });
 
   afterEach(async () => {
-    host.release();
-    await port.close();
+    await host.close();
   });
 
   it('answers Ping with an ok status', async () => {
@@ -120,9 +57,8 @@ describe('WMBusGateway — Device Management', () => {
 
   it('reports module identity in Get Device Information', async () => {
     // iM881A-XL is an integrated radio module — only its module type is spec-known.
-    host.release();
-    await port.close();
-    ({port, host} = await mount('iM881A-XL'));
+    await host.close();
+    ({host} = await mount('iM881A-XL'));
     const r = new ByteReader(
       (await host.request(Sap.DevMgmt, DevMgmt.GetDeviceInfoReq)).payload,
     );
@@ -147,9 +83,8 @@ describe('WMBusGateway — Device Management', () => {
       },
     ] as const;
     for (const stick of sticks) {
-      host.release();
-      await port.close();
-      ({port, host} = await mount(stick.variant));
+      await host.close();
+      ({host} = await mount(stick.variant));
       const r = new ByteReader(
         (await host.request(Sap.DevMgmt, DevMgmt.GetDeviceInfoReq)).payload,
       );
@@ -219,16 +154,14 @@ describe('WMBusGateway — Device Management', () => {
 });
 
 describe('WMBusGateway — WM-Bus Gateway SAP', () => {
-  let port: SerialPort;
-  let host: Host;
+  let host: HciHost;
 
   beforeEach(async () => {
-    ({port, host} = await mount());
+    ({host} = await mount());
   });
 
   afterEach(async () => {
-    host.release();
-    await port.close();
+    await host.close();
   });
 
   it('returns the default active configuration', async () => {
@@ -381,17 +314,15 @@ describe('WMBusGateway — WM-Bus Gateway SAP', () => {
   });
 
   it('rejects Radio Control on an iU891A-XL (USB stick)', async () => {
-    host.release();
-    await port.close();
-    ({port, host} = await mount('iU891A-XL'));
+    await host.close();
+    ({host} = await mount('iU891A-XL'));
     const rsp = await host.request(Sap.WMBus, WMBus.GetRadioConfigReq);
     expect(rsp.payload).toEqual([GwStatus.Unsupported]);
   });
 
   it('accepts Encrypt Send Packet on iU891A-XL when key exists for stored address', async () => {
-    host.release();
-    await port.close();
-    ({port, host} = await mount('iU891A-XL'));
+    await host.close();
+    ({host} = await mount('iU891A-XL'));
 
     await host.request(Sap.WMBus, WMBus.ClearDeviceListReq);
     const storedAddressItem = encodeDeviceItem({
@@ -526,9 +457,8 @@ describe('WMBusGateway — WM-Bus Gateway SAP', () => {
   });
 
   it('rejects Send-Packet-II and WM-Bus address on iM modules', async () => {
-    host.release();
-    await port.close();
-    ({port, host} = await mount('iM881A-XL'));
+    await host.close();
+    ({host} = await mount('iM881A-XL'));
     const sp = await host.request(
       Sap.WMBus,
       WMBus.SendPacketReq,
@@ -548,9 +478,8 @@ describe('WMBusGateway — WM-Bus Gateway SAP', () => {
   });
 
   it('round-trips the radio control configuration on iM modules (0x51/0x53)', async () => {
-    host.release();
-    await port.close();
-    ({port, host} = await mount('iM881A-XL'));
+    await host.close();
+    ({host} = await mount('iM881A-XL'));
     const cfg = [0x03, 0x00, 0x00, 0x00, 0xc8, 0x00]; // options=3, txDelay=200
     const set = await host.request(Sap.WMBus, WMBus.SetRadioConfigReq, cfg);
     expect(set.payload).toEqual([GwStatus.Ok]);
@@ -569,7 +498,7 @@ describe('WMBusGateway — restart & startup indication', () => {
   });
 
   it('emits a Startup Indication ~200ms after restart when enabled', async () => {
-    const {port, host} = await mount('iM881A-XL');
+    const {host} = await mount('iM881A-XL');
     // Enable system-option bit 4 (startup event).
     await host.request(
       Sap.DevMgmt,
@@ -586,12 +515,11 @@ describe('WMBusGateway — restart & startup indication', () => {
     expect(r.u32le()).toBe(0); // reserved
     expect(r.u8()).toBe(0xa3); // module type
 
-    host.release();
-    await port.close();
+    await host.close();
   }, 10000);
 
   it('clears scan mode after a restart', async () => {
-    const {port, host} = await mount();
+    const {host} = await mount();
     // Enable the startup event so we can await restart completion deterministically.
     await host.request(
       Sap.DevMgmt,
@@ -623,19 +551,18 @@ describe('WMBusGateway — restart & startup indication', () => {
 
     expect(await scanBitSet()).toBe(false); // scan mode cleared by the reboot
 
-    host.release();
-    await port.close();
+    await host.close();
   }, 10000);
 });
 
-const waitForStartup = async (host: Host): Promise<void> => {
+const waitForStartup = async (host: HciHost): Promise<void> => {
   let evt = await host.recv();
   while (!(evt.sap === Sap.DevMgmt && evt.msg === DevMgmt.StartupInd)) {
     evt = await host.recv();
   }
 };
 
-const enableStartupEvent = (host: Host): Promise<HciMessage> =>
+const enableStartupEvent = (host: HciHost): Promise<HciMessage> =>
   host.request(
     Sap.DevMgmt,
     DevMgmt.SetSystemOptionsReq,
@@ -651,7 +578,7 @@ describe('WMBusGateway — default configuration (0x07/0x09)', () => {
   });
 
   it('persists a Set Default Config across restart and resets to factory', async () => {
-    const {port, host} = await mount('iU891A-XL');
+    const {host} = await mount('iU891A-XL');
     await enableStartupEvent(host);
 
     // Set a new default (link mode T); the device restarts and loads it.
@@ -680,8 +607,7 @@ describe('WMBusGateway — default configuration (0x07/0x09)', () => {
     expect(active[0]).toBe(0x00); // factory link mode Off
     expect(new ByteReader(active.slice(1)).u16le()).toBe(0x0e); // factory options
 
-    host.release();
-    await port.close();
+    await host.close();
   }, 15000);
 });
 
@@ -694,7 +620,7 @@ describe('WMBusGateway — Approval Test SAP (0x20)', () => {
   });
 
   it('answers Reset Test / CW / PN9 on an iM module in Approval Test mode', async () => {
-    const {port, host} = await mount('iM881A-XL');
+    const {host} = await mount('iM881A-XL');
     await enableStartupEvent(host);
     await host.request(Sap.DevMgmt, DevMgmt.SetOpModeReq, [0x06]); // Approval Test -> restart
     await waitForStartup(host);
@@ -738,19 +664,17 @@ describe('WMBusGateway — Approval Test SAP (0x20)', () => {
       payload: [0x00],
     });
 
-    host.release();
-    await port.close();
+    await host.close();
   }, 15000);
 
   it('does not respond outside Approval mode, nor on iU sticks', async () => {
     for (const variant of ['iM881A-XL', 'iU891A-XL'] as const) {
-      const {port, host} = await mount(variant);
+      const {host} = await mount(variant);
       await host.send(Sap.ApprovalTest, ApprovalTest.ResetTestReq); // dropped (no handler)
       // The first frame the host reads is therefore the Ping response.
       const ping = await host.request(Sap.DevMgmt, DevMgmt.PingReq);
       expect(ping.msg).toBe(DevMgmt.PingRsp);
-      host.release();
-      await port.close();
+      await host.close();
     }
   }, 10000);
 });
