@@ -124,6 +124,16 @@ class FakeSerialWithWriteError extends FakeSerial {
   }
 }
 
+/** FakeSerial variant whose update() calls back with a non-Error value. */
+class FakeSerialWithStringError extends FakeSerial {
+  override update(
+    _opts: {baudRate: number},
+    cb?: (err?: Error | null) => void,
+  ): void {
+    cb?.('non-Error string' as unknown as Error);
+  }
+}
+
 const flush = () => new Promise<void>(r => setTimeout(r, 0));
 
 describe('attachBridge', () => {
@@ -319,6 +329,31 @@ describe('attachBridge', () => {
     expect(Array.from(ws.binary()[0])).toEqual([0x11, 0x22]);
   });
 
+  it('accepts binary frames sent as a non-Uint8Array ArrayBufferView (e.g. DataView)', async () => {
+    const serial = new FakeSerial();
+    const ws = new FakeWs();
+    attachBridge(serial, ws);
+
+    // DataView is an ArrayBufferView but NOT a Uint8Array → hits bridge.ts line 65
+    const buf = new Uint8Array([5, 6, 7]).buffer;
+    ws.recvRaw(new DataView(buf), true);
+    await flush();
+
+    expect(Array.from(ws.binary()[0])).toEqual([5, 6, 7]);
+  });
+
+  it('handles unrecognized binary data type by passing an empty frame', async () => {
+    const serial = new FakeSerial();
+    const ws = new FakeWs();
+    attachBridge(serial, ws);
+
+    // A number is none of the checked types → bridge.ts toBytes line 70 → Uint8Array(0)
+    ws.recvRaw(42 as unknown as Uint8Array, true);
+    await flush();
+
+    expect(Array.from(ws.binary()[0])).toEqual([]);
+  });
+
   it('logs a write error via options.log when serial.write fails', async () => {
     const serial = new FakeSerialWithWriteError();
     const ws = new FakeWs();
@@ -408,6 +443,59 @@ describe('attachBridge', () => {
 
     serial.emit('data', Uint8Array.from([1, 2]));
     expect(ws.binary()).toHaveLength(0);
+  });
+
+  it('errMessage falls back to String() for non-Error callback values', async () => {
+    const serial = new FakeSerialWithStringError();
+    const ws = new FakeWs();
+    attachBridge(serial, ws);
+
+    ws.recvCommand({
+      type: 'command',
+      id: 40,
+      command: 'setLineCoding',
+      args: {baudRate: 9600},
+    });
+    await flush();
+
+    const rsp = ws.responses().find(r => r.id === 40);
+    expect(rsp?.error).toBe('non-Error string');
+  });
+
+  it('break command with no duration defaults to 100 ms', () => {
+    jest.useFakeTimers({doNotFake: ['queueMicrotask']});
+    try {
+      const serial = new FakeSerial();
+      const ws = new FakeWs();
+      attachBridge(serial, ws);
+
+      // No args.duration → args.duration ?? 100 uses the 100 default
+      ws.recvCommand({type: 'command', id: 41, command: 'break'});
+      expect(serial.brk).toBe(true);
+      jest.advanceTimersByTime(100); // FakeSerial.set is sync → reply sent immediately
+      expect(serial.brk).toBe(false);
+      expect(ws.responses().find(r => r.id === 41)?.error).toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('silently ignores a non-command text frame (e.g. a stray response)', async () => {
+    const serial = new FakeSerial();
+    const ws = new FakeWs();
+    attachBridge(serial, ws);
+    const sentBefore = ws.sent.length;
+
+    // type='response' is a valid ControlMessage but not a command — must be ignored
+    ws.recvCommand({
+      type: 'response',
+      id: 1,
+      error: null,
+      result: null,
+    } as never);
+    await flush();
+
+    expect(ws.sent).toHaveLength(sentBefore);
   });
 
   it('setSignals with only a subset of flags sets only those', async () => {

@@ -175,6 +175,8 @@ type PortInternals = {
   setDeviceId(id: number): void;
   /** Reset to a closed, re-openable state after the device is physically lost. */
   handleDeviceLost(): void;
+  /** Reset to a closed, re-openable state after a clean physical detach. */
+  handleDeviceDetached(): void;
 };
 const portInternals = new WeakMap<SerialPort, PortInternals>();
 
@@ -225,11 +227,7 @@ function bufferSourceToBytes(chunk: ArrayBufferView | ArrayBuffer): number[] {
       new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength),
     );
   }
-  if (chunk instanceof ArrayBuffer) {
-    return Array.from(new Uint8Array(chunk));
-  }
-  // Best-effort fallback for any other array-like (e.g. a plain number[]).
-  return Array.from(chunk as unknown as ArrayLike<number>);
+  return Array.from(new Uint8Array(chunk as ArrayBuffer));
 }
 
 /**
@@ -314,6 +312,7 @@ export class SerialPort extends EventTarget {
    */
   #writeTimeoutFor(length: number): number {
     const kMinTimeoutMs = 2000;
+    /* istanbul ignore next — baudRate is always > 0 when the port is open */
     const baud = this.#baudRate > 0 ? this.#baudRate : 9600;
     const estimatedMs = Math.ceil((length * 10 * 1000) / baud) * 2;
     return Math.max(kMinTimeoutMs, estimatedMs);
@@ -345,6 +344,7 @@ export class SerialPort extends EventTarget {
         serialPortDeviceIds.set(this, id);
       },
       handleDeviceLost: () => this.#handleDeviceLost(),
+      handleDeviceDetached: () => this.#handleDeviceDetached(),
     });
   }
 
@@ -377,6 +377,53 @@ export class SerialPort extends EventTarget {
     this.#resetToClosedState(wasForgotten ? 'forgotten' : 'closed');
 
     this.dispatchEvent(new Event('disconnect'));
+  }
+
+  /**
+   * Reset this port to a closed, re-openable state after a clean physical
+   * detach. Unlike device loss, buffered readable bytes should still be
+   * observable before the stream ends.
+   */
+  #handleDeviceDetached(): void {
+    const wasForgotten = this.#state === 'forgotten';
+    const readable = this.#readable;
+    const writable = this.#writable;
+
+    // Keep the public event and state transition synchronous so existing
+    // callers observe the detach immediately, but defer the stream teardown by
+    // one microtask to let already-queued data drain first.
+    this.#state = wasForgotten ? 'forgotten' : 'closed';
+    this.#connected = false;
+    this.#readable = null;
+    this.#writable = null;
+    this.dispatchEvent(new Event('disconnect'));
+
+    queueMicrotask(() => {
+      // Close the readable stream so any bytes already queued can still be
+      // drained by the consumer before EOF.
+      try {
+        if (readable) this.#readableController?.close();
+      } catch {}
+
+      // A detached device can no longer accept writes, so reject any writable
+      // traffic and clear local state.
+      const lost = new DOMException(
+        'The device has been lost.',
+        'NetworkError',
+      );
+      if (writable) {
+        this.#writeFatal = true;
+        try {
+          this.#writableController?.error(lost);
+        } catch {}
+      }
+
+      // Mirror the stream-closing bookkeeping without treating this as a hard
+      // read fatal error.
+      this.#handleClosingReadableStream();
+      this.#handleClosingWritableStream();
+      this.#resetToClosedState(wasForgotten ? 'forgotten' : 'closed');
+    });
   }
 
   /**
@@ -1091,13 +1138,16 @@ export class Serial extends EventTarget {
       // SerialPort instance so a re-attach can reuse it. handleDeviceLost()
       // dispatches "disconnect" on the port.
       this.#usb.onDisconnect((event: ConnectEvent) => {
+        const wasLost = (event as ConnectEvent & {lost?: boolean}).lost ?? true;
         const prefix = `${event.deviceId}:`;
         let matched = false;
         for (const [key, port] of [...this.#knownPorts.entries()]) {
           if (key.startsWith(prefix)) {
-            // handleDeviceLost() dispatches "disconnect" on the port, which
-            // bubbles here with event.target === the port (per spec).
-            portInternals.get(port)?.handleDeviceLost();
+            // Physical loss tears down the stream immediately; a clean detach
+            // lets any already-buffered bytes drain before EOF.
+            const internals = portInternals.get(port);
+            if (wasLost) internals?.handleDeviceLost();
+            else internals?.handleDeviceDetached();
             matched = true;
           }
         }

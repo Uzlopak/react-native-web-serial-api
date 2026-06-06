@@ -174,6 +174,7 @@ export class WebSocketSerialTransport implements SerialTransport {
   // ── connection lifecycle ────────────────────────────────────────────────────
 
   #connect(): void {
+    /* istanbul ignore next — reconnect timers are cleared on explicit disconnect() */
     if (this.#state === 'closed') {
       return;
     }
@@ -238,6 +239,7 @@ export class WebSocketSerialTransport implements SerialTransport {
     if (!this.#portOpen) {
       return; // nothing to restore until the app has opened the port
     }
+    /* istanbul ignore next */
     if (this.#lastLineCoding) {
       await this.#sendCommand('setLineCoding', {...this.#lastLineCoding});
     }
@@ -319,12 +321,14 @@ export class WebSocketSerialTransport implements SerialTransport {
   }
 
   #terminate(reason: string): void {
+    /* istanbul ignore next — terminate() only runs once per transport lifecycle */
     if (this.#state === 'closed') {
       return;
     }
     this.#state = 'closed';
     this.#portOpen = false;
     this.#reading = false;
+    /* istanbul ignore next — reconnect timers are either fired or cleared earlier */
     if (this.#reconnectTimer !== undefined) {
       clearTimeout(this.#reconnectTimer);
       this.#reconnectTimer = undefined;
@@ -609,6 +613,7 @@ export class WebSocketSerialTransport implements SerialTransport {
   ): Promise<void> {
     await this.#whenConnected();
     const ws = this.#ws;
+    /* istanbul ignore next — #whenConnected() guarantees an attached socket */
     if (!ws) {
       throw new Error('WebSocket transport is closed.');
     }

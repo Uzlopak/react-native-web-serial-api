@@ -389,7 +389,7 @@ export class VirtualSerialTransport implements SerialTransport {
   }
 
   /** Detach a device and fire "disconnect"; any open port becomes closed. */
-  detach(device: VirtualSerialDevice): void {
+  detach(device: VirtualSerialDevice, lost = false): void {
     const {deviceId, usbVendorId, usbProductId} = device;
     const wasOpen = device.isOpen;
     device.attached = false;
@@ -400,13 +400,14 @@ export class VirtualSerialTransport implements SerialTransport {
       deviceId,
       usbVendorId,
       usbProductId,
+      lost,
     });
   }
 
   /** Simulate an unplug while open: error the stream first, then disconnect. */
   loseDevice(device: VirtualSerialDevice): void {
     if (device.isOpen) this._error(device, 'Device disconnected');
-    this.detach(device);
+    this.detach(device, true);
   }
 
   /** Script the next showPortPicker() resolution (a device or a predicate). */

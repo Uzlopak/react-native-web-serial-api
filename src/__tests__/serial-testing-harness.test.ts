@@ -2,12 +2,14 @@
  * Tests for the shipped consumer testing API: `mountSerialDevice`, the fluent
  * `SerialTestHarness`, and `whenOpened/whenClosed`.
  */
-import {describe, expect, it} from '@jest/globals';
+import {describe, expect, it, jest} from '@jest/globals';
 import {
+  assertRejects,
   createSerialTestHarness,
   EchoDevice,
   LineDevice,
   mountSerialDevice,
+  resetUsbSerial,
   SerialDevice,
   SerialTestHarness,
   SilentDevice,
@@ -208,6 +210,21 @@ describe('SerialTestHarness — coverage gaps', () => {
     await client.close();
   });
 
+  it('readBytes hits the immediate timeout path when the deadline is already expired', async () => {
+    const {client} = await mountSerialDevice(new SilentDevice());
+    await client.open();
+    const now = Date.now();
+    const dateNow = jest.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      await expect(client.readBytes(1, {timeout: 0})).rejects.toThrow(
+        /timed out reading 1 bytes/,
+      );
+    } finally {
+      dateNow.mockRestore();
+      await client.close();
+    }
+  });
+
   it('readUntil timeout message is descriptive', async () => {
     const {client} = await mountSerialDevice(new SilentDevice());
     await client.open();
@@ -251,6 +268,20 @@ describe('SerialTestHarness — coverage gaps', () => {
     await expect(client.expectIdle(100)).resolves.toBeUndefined();
   });
 
+  it('readAvailable returns an empty chunk when the stream ends with no buffered data', async () => {
+    const {client, device} = await mountSerialDevice(new SilentDevice());
+    await client.open();
+    device.detach(); // stream ends, nothing buffered
+    expect(Array.from(await client.readAvailable({timeout: 100}))).toEqual([]);
+  });
+
+  it('readAvailable returns an empty chunk after client.close()', async () => {
+    const {client} = await mountSerialDevice(new SilentDevice());
+    await client.open();
+    await client.close();
+    expect(Array.from(await client.readAvailable({timeout: 100}))).toEqual([]);
+  });
+
   it('isOpen is false before open() and true after', async () => {
     const {port} = await mountSerialDevice(new EchoDevice());
     const client = new SerialTestHarness(port);
@@ -270,5 +301,158 @@ describe('SerialTestHarness — coverage gaps', () => {
     expect(client).toBeInstanceOf(SerialTestHarness);
     await client.open();
     await client.close();
+  });
+
+  it('.port getter returns the underlying SerialPort', async () => {
+    // Covers serial-test-harness.ts line 59: return this.#port
+    const {port} = await mountSerialDevice(new EchoDevice());
+    const client = new SerialTestHarness(port);
+    expect(client.port).toBe(port);
+  });
+
+  it('write() throws when the harness is not open', async () => {
+    const {port} = await mountSerialDevice(new EchoDevice());
+    const client = new SerialTestHarness(port);
+    await expect(client.write([1])).rejects.toThrow(
+      'SerialTestHarness is not open.',
+    );
+  });
+
+  it('installGlobally sets the transport as the global USB serial', async () => {
+    await mountSerialDevice(new EchoDevice(), {installGlobally: true});
+    resetUsbSerial();
+  });
+
+  it('expectIdle throws immediately when bytes are already buffered', async () => {
+    // Covers serial-test-harness.ts line 231: throw new Error(...buffered...)
+    const {client, serialDevice} = await mountSerialDevice(new PushDevice());
+    await client.open();
+    serialDevice.emit([1, 2, 3]);
+    await new Promise(r => setTimeout(r, 0)); // let bytes arrive
+    await expect(client.expectIdle(50)).rejects.toThrow(/already buffered/);
+    await client.close();
+  });
+
+  it('close() before open() succeeds without error', async () => {
+    const {port} = await mountSerialDevice(new EchoDevice());
+    const client = new SerialTestHarness(port);
+    await expect(client.close()).resolves.toBeUndefined();
+  });
+
+  it('readLine strips LF but not absent CR (line ending is \\n only)', async () => {
+    const {client, serialDevice} = await mountSerialDevice(new PushDevice());
+    await client.open();
+    serialDevice.emit([0x48, 0x69, 0x0a]); // 'Hi\n' — LF only, no CR
+    expect(await client.readLine()).toBe('Hi');
+    await client.close();
+  });
+
+  it('readLine returns buffered text when stream ends without \\n', async () => {
+    const {client, serialDevice, device} = await mountSerialDevice(
+      new PushDevice(),
+    );
+    await client.open();
+    serialDevice.emit([0x48, 0x69]); // 'Hi' — no trailing newline
+    const linePromise = client.readLine({timeout: 500});
+    device.detach(); // end the stream before \n arrives
+    expect(await linePromise).toBe('Hi');
+  });
+
+  it('readLine still drains bytes that land in the end-of-stream race window', async () => {
+    const {client, serialDevice, device} = await mountSerialDevice(
+      new PushDevice(),
+    );
+    await client.open();
+    serialDevice.emit([0x48, 0x69]);
+    device.detach(); // end the stream before the microtask-delivered bytes land
+    expect(await client.readLine({timeout: 500})).toBe('Hi');
+  });
+
+  it('drain() clears buffered bytes', async () => {
+    // Covers serial-test-harness.ts line 250: this.#pending.length = 0
+    const {client, serialDevice} = await mountSerialDevice(new PushDevice());
+    await client.open();
+    serialDevice.emit([1, 2, 3]);
+    await new Promise(r => setTimeout(r, 0)); // let bytes arrive
+    client.drain();
+    // After drain, readBytes should block (nothing buffered)
+    const readPromise = client.readBytes(1, {timeout: 50});
+    await expect(readPromise).rejects.toThrow(/timed out/);
+    await client.close();
+  });
+});
+
+describe('assertRejects — coverage gaps', () => {
+  it('accepts a RegExp as the expected message matcher', async () => {
+    // Covers harness.ts lines 59-63: expected.message instanceof RegExp path
+    await assertRejects(
+      () => Promise.reject(new Error('connection refused')),
+      'should throw',
+      {message: /refused/},
+    );
+  });
+
+  it('accepts a plain string as the expected message matcher', async () => {
+    await assertRejects(
+      () => Promise.reject(new Error('connection refused')),
+      'should throw',
+      {message: 'refused'},
+    );
+  });
+
+  it('throws when the error message does not match the RegExp', async () => {
+    await expect(
+      assertRejects(() => Promise.reject(new Error('timeout')), 'label', {
+        message: /refused/,
+      }),
+    ).rejects.toThrow(/label.*expected the error message to match/);
+  });
+});
+
+describe('mountSerialDevice (whenClosed with index)', () => {
+  it('whenClosed(index) resolves when the specified device closes', async () => {
+    const {ports, whenClosed} = await mountSerialDevice([
+      new EchoDevice({usbVendorId: 0x0403, usbProductId: 0x6001}),
+      new EchoDevice({usbVendorId: 0x10c4, usbProductId: 0xea60}),
+    ]);
+    await ports[0].open({baudRate: 9600});
+    const closed = whenClosed(0);
+    await ports[0].close();
+    await expect(closed).resolves.toBeUndefined();
+  });
+});
+
+describe('mountSerialDevice (race paths)', () => {
+  it('whenOpened() without index resolves when any device opens', async () => {
+    // Covers mount.ts line 139: Promise.race path
+    const {ports, whenOpened} = await mountSerialDevice([
+      new EchoDevice({usbVendorId: 0x0403, usbProductId: 0x6001}),
+      new EchoDevice({usbVendorId: 0x10c4, usbProductId: 0xea60}),
+    ]);
+    const raceOpened = whenOpened(); // no index → Promise.race
+    await ports[1].open({baudRate: 9600});
+    await expect(raceOpened).resolves.toMatchObject({baudRate: 9600});
+    await ports[1].close();
+  });
+
+  it('whenClosed() without index resolves when any device closes', async () => {
+    // Covers mount.ts line 143: Promise.race path
+    const {ports, whenClosed} = await mountSerialDevice([
+      new EchoDevice({usbVendorId: 0x0403, usbProductId: 0x6001}),
+      new EchoDevice({usbVendorId: 0x10c4, usbProductId: 0xea60}),
+    ]);
+    await ports[0].open({baudRate: 9600});
+    const raceClosed = whenClosed(); // no index → Promise.race
+    await ports[0].close();
+    await expect(raceClosed).resolves.toBeUndefined();
+  });
+});
+
+describe('VirtualSerialDevice.whenClosed', () => {
+  it('resolves immediately when the device is not open', async () => {
+    // Covers virtual-serial-device.ts line 262: return Promise.resolve()
+    const {device} = await mountSerialDevice(new EchoDevice());
+    // Port was never opened, so whenClosed() should resolve immediately
+    await expect(device.whenClosed()).resolves.toBeUndefined();
   });
 });

@@ -12,6 +12,7 @@ import {
 } from '../testing/serial-device';
 import {VirtualSerialTransport} from '../testing/virtual-serial-device';
 import type {SerialTransport} from '../transport';
+import {resetUsbSerial, setUsbSerial} from '../UsbSerial';
 import {Serial, SerialPort} from '../WebSerial';
 
 const FTDI = {usbVendorId: 0x0403, usbProductId: 0x6001} as const;
@@ -38,6 +39,23 @@ describe('Serial.getPorts()', () => {
     const ports = await serial.getPorts();
     expect(ports).toHaveLength(1);
     expect(ports[0]).toBeInstanceOf(SerialPort);
+    expect(ports[0].getInfo()).toEqual({
+      usbVendorId: FTDI.usbVendorId,
+      usbProductId: FTDI.usbProductId,
+    });
+  });
+
+  it('skips devices without USB permission', async () => {
+    const transport = new VirtualSerialTransport();
+    transport.addDevice(new EchoDevice(FTDI), {hasPermission: true});
+    transport.addDevice(
+      new EchoDevice({usbVendorId: 0x10c4, usbProductId: 0xea60}),
+      {hasPermission: false},
+    );
+    const serial = new Serial(transport);
+
+    const ports = await serial.getPorts();
+    expect(ports).toHaveLength(1);
     expect(ports[0].getInfo()).toEqual({
       usbVendorId: FTDI.usbVendorId,
       usbProductId: FTDI.usbProductId,
@@ -131,6 +149,21 @@ describe('SerialPort.open()', () => {
     );
     await expect(port.open({baudRate: 9600, bufferSize: -1})).rejects.toThrow(
       'bufferSize must be a positive, non-zero value.',
+    );
+  });
+
+  it('rejects invalid dataBits and stopBits values', async () => {
+    const {serial} = setup();
+    const [port] = await serial.getPorts();
+
+    // @ts-expect-error
+    await expect(port.open({baudRate: 9600, dataBits: 6})).rejects.toThrow(
+      'dataBits must be 7 or 8.',
+    );
+
+    // @ts-expect-error
+    await expect(port.open({baudRate: 9600, stopBits: 3})).rejects.toThrow(
+      'stopBits must be 1 or 2.',
     );
   });
 
@@ -385,6 +418,81 @@ describe('SerialPort signals', () => {
 
     await port.close();
   });
+
+  it('rejects setSignals and getSignals when the port is not open', async () => {
+    const {serial} = setup();
+    const [port] = await serial.getPorts();
+
+    await expect(
+      port.setSignals({dataTerminalReady: true}),
+    ).rejects.toMatchObject({
+      name: 'InvalidStateError',
+    });
+    await expect(port.getSignals()).rejects.toMatchObject({
+      name: 'InvalidStateError',
+    });
+  });
+
+  it('applies DTR, RTS, and break through setSignals and reads back signals', async () => {
+    const {serial, transport, device} = setup();
+    const [port] = await serial.getPorts();
+    await port.open({baudRate: 9600});
+
+    const dtrSpy = jest.spyOn(transport, 'setDTR');
+    const rtsSpy = jest.spyOn(transport, 'setRTS');
+    const breakSpy = jest.spyOn(transport, 'setBreak');
+
+    await port.setSignals({
+      dataTerminalReady: true,
+      requestToSend: false,
+      break: true,
+    });
+
+    expect(dtrSpy).toHaveBeenCalledWith(
+      device.deviceId,
+      device.portNumber,
+      true,
+    );
+    expect(rtsSpy).toHaveBeenCalledWith(
+      device.deviceId,
+      device.portNumber,
+      false,
+    );
+    expect(breakSpy).toHaveBeenCalledWith(
+      device.deviceId,
+      device.portNumber,
+      true,
+    );
+
+    await expect(port.getSignals()).resolves.toMatchObject({
+      dataCarrierDetect: true,
+      clearToSend: false,
+      ringIndicator: false,
+      dataSetReady: true,
+    });
+
+    device.failNext('getSignals');
+    await expect(port.getSignals()).rejects.toMatchObject({
+      name: 'NetworkError',
+    });
+
+    await port.close();
+  });
+
+  it('applies DTR without RTS through setSignals on an open port', async () => {
+    const {serial, transport} = setup();
+    const [port] = await serial.getPorts();
+    await port.open({baudRate: 9600});
+
+    const dtrSpy = jest.spyOn(transport, 'setDTR');
+    const rtsSpy = jest.spyOn(transport, 'setRTS');
+
+    await port.setSignals({dataTerminalReady: true});
+
+    expect(dtrSpy).toHaveBeenCalledWith(1, 0, true);
+    expect(rtsSpy).not.toHaveBeenCalled();
+    await port.close();
+  });
 });
 
 describe('SerialPort streams', () => {
@@ -467,6 +575,19 @@ describe('SerialPort streams', () => {
     await port.close();
   });
 
+  it('errors the writable stream when the device is detached', async () => {
+    const {serial, device} = setup(new SilentDevice(FTDI));
+    const [port] = await serial.getPorts();
+    await port.open({baudRate: 9600});
+    const writer = port.writable!.getWriter();
+
+    device.detach();
+    await Promise.resolve();
+
+    writer.releaseLock();
+    expect(port.writable).toBeNull();
+  });
+
   it('runs writable close algorithm', async () => {
     const {serial} = setup(new SilentDevice(FTDI));
     const [port] = await serial.getPorts();
@@ -524,6 +645,40 @@ describe('SerialPort streams', () => {
     expect(Array.from(got.value ?? new Uint8Array())).toEqual([0x42]);
     reader.releaseLock();
     await port.close();
+  });
+
+  it('errors the readable stream when the device reports a matching error', async () => {
+    const {serial, device} = setup(new SilentDevice(FTDI));
+    const [port] = await serial.getPorts();
+    await port.open({baudRate: 9600});
+    const reader = port.readable!.getReader();
+
+    device.emitError('break detected', 'BreakError');
+    await Promise.resolve();
+
+    await expect(reader.read()).rejects.toMatchObject({
+      name: 'BreakError',
+    });
+
+    reader.releaseLock();
+    expect(port.readable).toBeNull();
+  });
+
+  it('uses NetworkError when the device error omits an explicit name', async () => {
+    const {serial, device} = setup(new SilentDevice(FTDI));
+    const [port] = await serial.getPorts();
+    await port.open({baudRate: 9600});
+    const reader = port.readable!.getReader();
+
+    device.emitError('generic device error');
+    await Promise.resolve();
+
+    await expect(reader.read()).rejects.toMatchObject({
+      name: 'NetworkError',
+    });
+
+    reader.releaseLock();
+    expect(port.readable).toBeNull();
   });
 
   it('wraps write transport failures as NetworkError and closes writable stream', async () => {
@@ -744,6 +899,24 @@ describe('Serial connect/disconnect events', () => {
     expect(reacquired).not.toBe(port);
   });
 
+  it('keeps forgotten state when a forgotten device is physically lost', async () => {
+    const {serial, device} = setup(new SilentDevice(FTDI));
+    const [port] = await serial.getPorts();
+
+    await port.open({baudRate: 9600});
+    await port.forget();
+
+    device.loseDevice();
+
+    expect(port.connected).toBe(false);
+    expect(port.readable).toBeNull();
+    expect(port.writable).toBeNull();
+
+    await expect(port.open({baudRate: 9600})).rejects.toMatchObject({
+      name: 'InvalidStateError',
+    });
+  });
+
   it('bubbles connect to serial with target set to the known port', async () => {
     const {serial, transport, device} = setup();
     const [port] = await serial.getPorts();
@@ -926,6 +1099,17 @@ describe('Serial.requestPort()', () => {
     expect(second).toBe(first);
   });
 
+  it('rejects requestPort when the user cancels the picker', async () => {
+    const {serial, transport} = setup();
+    jest
+      .spyOn(transport, 'showPortPicker')
+      .mockRejectedValueOnce(new Error('picker cancelled'));
+
+    await expect(serial.requestPort()).rejects.toMatchObject({
+      name: 'NotFoundError',
+    });
+  });
+
   it('returns a fresh openable port after the previous instance was forgotten', async () => {
     const {serial} = setup();
     const first = await serial.requestPort();
@@ -960,6 +1144,84 @@ describe('Serial initialization fallback', () => {
       undefined as unknown as number,
     );
     expect(fake.getInfo()).toEqual({});
+  });
+
+  it('boots from the global setUsbSerial() override and handles clean detach', async () => {
+    const transport = new VirtualSerialTransport();
+    const device = transport.addDevice(new SilentDevice(FTDI), {
+      hasPermission: true,
+    });
+    setUsbSerial(transport);
+    try {
+      const serial = new Serial();
+      const [port] = await serial.getPorts();
+      await port.open({baudRate: 9600});
+
+      const onDisconnect = jest.fn();
+      port.ondisconnect = onDisconnect;
+
+      device.detach();
+
+      expect(onDisconnect).toHaveBeenCalledTimes(1);
+      expect(port.connected).toBe(false);
+    } finally {
+      resetUsbSerial();
+    }
+  });
+
+  it('treats disconnect events without a lost flag as physical loss', async () => {
+    class DisconnectWithoutLostTransport extends VirtualSerialTransport {
+      #disconnectListener:
+        | ((event: {
+            deviceId: number;
+            usbVendorId: number;
+            usbProductId: number;
+          }) => void)
+        | null = null;
+
+      override onDisconnect(
+        listener: (event: {
+          deviceId: number;
+          usbVendorId: number;
+          usbProductId: number;
+        }) => void,
+      ) {
+        this.#disconnectListener = listener;
+        return super.onDisconnect(listener);
+      }
+
+      emitDisconnectWithoutLost(device: {
+        deviceId: number;
+        usbVendorId: number;
+        usbProductId: number;
+      }): void {
+        this.#disconnectListener?.(device);
+      }
+    }
+
+    const transport = new DisconnectWithoutLostTransport();
+    const device = transport.addDevice(new SilentDevice(FTDI), {
+      hasPermission: true,
+    });
+    setUsbSerial(transport);
+    try {
+      const serial = new Serial();
+      const [port] = await serial.getPorts();
+      await port.open({baudRate: 9600});
+      const onDisconnect = jest.fn();
+      port.ondisconnect = onDisconnect;
+
+      transport.emitDisconnectWithoutLost({
+        deviceId: device.deviceId,
+        usbVendorId: device.usbVendorId,
+        usbProductId: device.usbProductId,
+      });
+
+      expect(onDisconnect).toHaveBeenCalledTimes(1);
+      expect(port.connected).toBe(false);
+    } finally {
+      resetUsbSerial();
+    }
   });
 });
 

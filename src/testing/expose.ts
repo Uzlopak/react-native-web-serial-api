@@ -91,7 +91,8 @@ function loadWebSocketServer(): WebSocketServerCtor {
     typeof (module as {require?: unknown}).require === 'function'
       ? // @ts-ignore
         (module as {require: (id: string) => unknown}).require.bind(module)
-      : undefined;
+      : /* istanbul ignore next */ undefined;
+  /* istanbul ignore next — only reachable in non-Node bundled environments */
   if (!nodeRequire) {
     throw new Error(
       "exposeSerialDevice could not load 'ws'. Pass options.WebSocketServer, " +

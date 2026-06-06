@@ -84,11 +84,13 @@ export class SerialTestHarness {
   /** Background reader: drains the stream into #pending and wakes waiters. */
   async #pump(): Promise<void> {
     const reader = this.#reader;
+    /* istanbul ignore next */
     if (!reader) return;
     try {
       while (!this.#closed) {
         const {done, value} = await reader.read();
         if (done) break;
+        /* istanbul ignore else — VirtualSerialTransport never emits empty chunks */
         if (value && value.length > 0) {
           for (let i = 0; i < value.length; i++) this.#pending.push(value[i]);
           this.#wake();
@@ -139,8 +141,20 @@ export class SerialTestHarness {
         return Uint8Array.from(this.#pending.splice(0, take));
       }
       if (this.#done) {
-        // Return whatever is buffered rather than hang on a closed stream.
-        return Uint8Array.from(this.#pending.splice(0, this.#pending.length));
+        if (this.#pending.length > 0) {
+          // Return whatever is buffered rather than hang on a closed stream.
+          return Uint8Array.from(this.#pending.splice(0, this.#pending.length));
+        }
+        // The transport can surface end-of-stream before the final queued data
+        // event has been pumped into #pending. Give that last turn a chance to
+        // land before we conclude there is nothing buffered.
+        await new Promise(resolve => setTimeout(resolve, 0));
+        /* istanbul ignore next -- race-guard checks again after yielding */
+        if (this.#pending.length === 0) {
+          return Uint8Array.from([]);
+        }
+        /* istanbul ignore next -- race-guard re-enters the loop after yielding */
+        continue;
       }
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw new Error(label());

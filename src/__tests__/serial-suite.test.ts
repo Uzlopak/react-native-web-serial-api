@@ -113,6 +113,49 @@ describe('runSerialTests', () => {
     expect(results[0].error).toContain('cannot open');
   });
 
+  it('swallows a disconnect error in shared mode without failing the run', async () => {
+    const {port} = await mountSerialDevice(new EchoDevice());
+    const results = await runSerialTests(
+      [{name: 'x', run: async (_c: SerialTestHarness) => {}}],
+      port,
+      {
+        client: {
+          connect: async p => {
+            const h = new SerialTestHarness(p);
+            await h.open();
+            return h;
+          },
+          disconnect: async () => {
+            throw new Error('cleanup failed');
+          },
+        },
+      },
+    );
+    expect(results[0].passed).toBe(true);
+  });
+
+  it('swallows a per-test disconnect error when shared is false', async () => {
+    const {port} = await mountSerialDevice(new EchoDevice());
+    const results = await runSerialTests(
+      [{name: 'x', run: async (_c: SerialTestHarness) => {}}],
+      port,
+      {
+        shared: false,
+        client: {
+          connect: async p => {
+            const h = new SerialTestHarness(p);
+            await h.open();
+            return h;
+          },
+          disconnect: async () => {
+            throw new Error('cleanup failed');
+          },
+        },
+      },
+    );
+    expect(results[0].passed).toBe(true);
+  });
+
   it('drives a custom protocol client built on the SerialTestHarness', async () => {
     const {port} = await mountSerialDevice(new PingDevice());
     // A trivial "protocol client" that wraps a SerialTestHarness.
@@ -175,6 +218,15 @@ describe('compareResults', () => {
     const byName = new Map(rows.map(r => [r.name, r]));
     expect(byName.get('b')?.passed).toBe(false);
     expect(byName.get('b')?.error).toContain('did not respond');
+  });
+
+  it('reports "reference failed, candidate passed" when candidate improves on reference', () => {
+    const rows = compareResults(
+      [{name: 'x', passed: false, durationMs: 1}],
+      [{name: 'x', passed: true, durationMs: 1}],
+    );
+    expect(rows[0].passed).toBe(false); // still a disagreement
+    expect(rows[0].error).toContain('reference failed, candidate passed');
   });
 
   it('surfaces candidate-only cases as failures', () => {

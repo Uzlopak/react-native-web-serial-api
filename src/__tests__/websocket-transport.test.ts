@@ -3,7 +3,7 @@
  * WebSocket, plus an end-to-end echo that drives the real `Serial`/`SerialPort`
  * polyfill through the transport and the bridge core (no sockets, no hardware).
  */
-import {describe, expect, it, jest} from '@jest/globals';
+import {afterEach, describe, expect, it, jest} from '@jest/globals';
 import type {FlowControl} from '../transport';
 import {Serial} from '../WebSerial';
 import {attachBridge, type SerialLike, type WsLike} from '../websocket/bridge';
@@ -13,6 +13,14 @@ import {
   type WebSocketLike,
   WebSocketSerialTransport,
 } from '../websocket/WebSocketSerialTransport';
+
+/** Every transport created during a test — disconnected automatically after each test. */
+const createdTransports: WebSocketSerialTransport[] = [];
+afterEach(() => {
+  for (const t of createdTransports) t.disconnect();
+  createdTransports.length = 0;
+  FakeWebSocket.instances = [];
+});
 
 /** A fake WebSocket the transport constructs; the test drives the far end. */
 class FakeWebSocket implements WebSocketLike {
@@ -88,6 +96,7 @@ function mount(
     reconnect: opts.reconnect,
     connectTimeoutMs: opts.connectTimeoutMs,
   });
+  createdTransports.push(transport);
   const ws = FakeWebSocket.instances[0];
   const commands: Array<{
     id: number;
@@ -154,6 +163,7 @@ describe('WebSocketSerialTransport', () => {
       reconnect: true,
       connectTimeoutMs: 5,
     });
+    createdTransports.push(transport);
     const ports = await transport.findAllDrivers();
     expect(ports).toEqual([]);
   });
@@ -217,6 +227,7 @@ describe('WebSocketSerialTransport', () => {
       WebSocket: ThrowCtor as unknown as WebSocketCtor,
       reconnect: false,
     });
+    createdTransports.push(transport);
     expect(transport.connectionState).toBe('closed');
   });
 
@@ -286,6 +297,31 @@ describe('WebSocketSerialTransport', () => {
     expect(commands.find(c => c.command === 'flush')).toBeTruthy();
   });
 
+  it('purgeHwBuffers swallows a rejected flush response', async () => {
+    const {transport, ws} = mount();
+    const baseOnSend = ws.onSend!;
+    ws.onSend = d => {
+      if (typeof d === 'string') {
+        const msg = JSON.parse(d);
+        if (msg.type === 'command' && msg.command === 'flush') {
+          ws.deliverText(
+            JSON.stringify({
+              type: 'response',
+              id: msg.id,
+              error: 'flush failed',
+            }),
+          );
+          return;
+        }
+      }
+      baseOnSend(d);
+    };
+
+    await expect(
+      transport.purgeHwBuffers(1, 0, true, true),
+    ).resolves.toBeUndefined();
+  });
+
   it('setFlowControl is a no-op; getFlowControl and getSupportedFlowControl return defaults', async () => {
     const {transport} = mount();
     await expect(
@@ -330,6 +366,40 @@ describe('WebSocketSerialTransport', () => {
     expect(onError).not.toHaveBeenCalled();
     ws.deliverText(JSON.stringify({type: 'unknown'}));
     expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('silently ignores a "command"-type message received from the server', () => {
+    const {ws} = mount();
+    // Server-to-client 'command' messages are not part of the protocol but
+    // must not throw. parseControlMessage returns non-null for type='command',
+    // which falls through the response/event checks silently.
+    expect(() => {
+      ws.deliverText(JSON.stringify({type: 'command', id: 1, command: 'ping'}));
+    }).not.toThrow();
+  });
+
+  it('uses globalThis.WebSocket when no options are passed', () => {
+    FakeWebSocket.instances = [];
+    const prev = (globalThis as {WebSocket?: WebSocketCtor}).WebSocket;
+    (globalThis as {WebSocket?: WebSocketCtor}).WebSocket =
+      FakeWebSocket as unknown as WebSocketCtor;
+    try {
+      const t = new WebSocketSerialTransport('ws://test');
+      createdTransports.push(t);
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    } finally {
+      (globalThis as {WebSocket?: WebSocketCtor}).WebSocket = prev;
+    }
+  });
+
+  it('wraps a non-Error thrown by ws.send in a new Error', async () => {
+    const {transport, ws} = mount();
+    ws.onSend = d => {
+      if (typeof d === 'string') throw 'string-error';
+    };
+    await expect(transport.open(1, 0, {baudRate: 9600})).rejects.toThrow(
+      'string-error',
+    );
   });
 
   it('ignores response with no matching pending command', () => {
@@ -421,6 +491,7 @@ describe('WebSocketSerialTransport — reconnection', () => {
       WebSocket: FakeWebSocket as unknown as WebSocketCtor,
       reconnectInitialDelayMs: 0,
     });
+    createdTransports.push(transport);
     const ws1 = FakeWebSocket.instances[0];
     autoAnswer(ws1);
     ws1.fireOpen();
@@ -477,6 +548,7 @@ describe('WebSocketSerialTransport — reconnection', () => {
       WebSocket: FakeWebSocket as unknown as WebSocketCtor,
       reconnectInitialDelayMs: 0,
     });
+    createdTransports.push(transport);
     const ws1 = FakeWebSocket.instances[0];
     autoAnswer(ws1);
     ws1.fireOpen();
@@ -502,6 +574,7 @@ describe('WebSocketSerialTransport — reconnection', () => {
       reconnectInitialDelayMs: 0,
       maxReconnectAttempts: 1,
     });
+    createdTransports.push(transport);
     const onDisconnect = jest.fn();
     const ws1 = FakeWebSocket.instances[0];
     autoAnswer(ws1);
@@ -524,6 +597,7 @@ describe('WebSocketSerialTransport — reconnection', () => {
       WebSocket: FakeWebSocket as unknown as WebSocketCtor,
       reconnectInitialDelayMs: 0,
     });
+    createdTransports.push(transport);
     const ws1 = FakeWebSocket.instances[0];
     autoAnswer(ws1);
     ws1.fireOpen();
@@ -559,6 +633,7 @@ describe('WebSocketSerialTransport — reconnection', () => {
       WebSocket: FakeWebSocket as unknown as WebSocketCtor,
       reconnectInitialDelayMs: 0,
     });
+    createdTransports.push(transport);
     const ws1 = FakeWebSocket.instances[0];
     autoAnswer(ws1);
     ws1.fireOpen();
@@ -577,6 +652,7 @@ describe('WebSocketSerialTransport — reconnection', () => {
       commandTimeoutMs: 50,
       reconnect: false,
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0];
 
     // Answer only getPortInfo (from #loadPortInfo in #onOpen); let setLineCoding hang.
@@ -603,12 +679,74 @@ describe('WebSocketSerialTransport — reconnection', () => {
     ).rejects.toThrow(/timed out/);
   }, 5000);
 
+  it('keeps a response that arrives before the timeout callback runs', async () => {
+    FakeWebSocket.instances = [];
+    const transport = new WebSocketSerialTransport('ws://test', {
+      WebSocket: FakeWebSocket as unknown as WebSocketCtor,
+      commandTimeoutMs: 50,
+      reconnect: false,
+    });
+    createdTransports.push(transport);
+    const ws = FakeWebSocket.instances[0];
+    autoAnswer(ws);
+    ws.fireOpen();
+    await tick();
+
+    const commands: Array<{id: number; command: string}> = [];
+    ws.onSend = d => {
+      if (typeof d !== 'string') return;
+      const m = JSON.parse(d) as {type: string; id: number; command: string};
+      if (m.type === 'command') {
+        commands.push(m);
+      }
+    };
+
+    const callbacks: Array<() => void> = [];
+    const setTimeoutSpy = jest
+      .spyOn(globalThis, 'setTimeout')
+      .mockImplementation(
+        (callback: unknown, _ms?: number, ...args: unknown[]) => {
+          callbacks.push(() => {
+            if (typeof callback === 'function') {
+              callback(...args);
+            }
+          });
+          return 0 as unknown as ReturnType<typeof setTimeout>;
+        },
+      );
+    const clearTimeoutSpy = jest
+      .spyOn(globalThis, 'clearTimeout')
+      .mockImplementation(() => undefined);
+
+    try {
+      const pending = transport.setDTR(1, 0, true);
+      await Promise.resolve();
+      const [command] = commands;
+      ws.deliverText(
+        JSON.stringify({
+          type: 'response',
+          id: command.id,
+          error: null,
+          result: null,
+        }),
+      );
+
+      await expect(pending).resolves.toBeUndefined();
+      expect(callbacks).toHaveLength(1);
+      callbacks[0]();
+    } finally {
+      setTimeoutSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
+    }
+  });
+
   it('stays stable and reaches open state after 10 rapid drop/reconnect cycles', async () => {
     FakeWebSocket.instances = [];
     const transport = new WebSocketSerialTransport('ws://test', {
       WebSocket: FakeWebSocket as unknown as WebSocketCtor,
       reconnectInitialDelayMs: 0,
     });
+    createdTransports.push(transport);
 
     for (let i = 0; i < 10; i++) {
       const ws = FakeWebSocket.instances[i];
@@ -661,46 +799,88 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
       WebSocket: FakeWebSocket as unknown as WebSocketCtor,
       reconnectInitialDelayMs: 0,
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0];
     autoAnswer(ws);
     ws.fireOpen();
     await tick();
 
+    // Close socket → schedules a 0ms reconnect timer
+    ws.fireClose();
+    // Disconnect immediately → state = 'closed' before the timer fires
     transport.disconnect();
-    expect(transport.connectionState).toBe('closed');
+    // Timer fires on next tick → #connect() → state === 'closed' → return (line 178)
+    await tick();
 
-    // Calling connect when closed should be a no-op
-    // We can't directly call #connect, but we can verify state stays closed
     expect(transport.connectionState).toBe('closed');
+    expect(FakeWebSocket.instances).toHaveLength(1); // no second socket was created
   });
 
-  it('handles error during session restore in #onOpen', async () => {
+  it('ignores stale open and message events from a replaced socket', async () => {
     FakeWebSocket.instances = [];
-    new WebSocketSerialTransport('ws://test', {
+    const onConnected = jest.fn();
+    const transport = new WebSocketSerialTransport('ws://test', {
       WebSocket: FakeWebSocket as unknown as WebSocketCtor,
       reconnectInitialDelayMs: 0,
-      commandTimeoutMs: 50,
+      onConnected,
     });
-    const ws = FakeWebSocket.instances[0];
+    createdTransports.push(transport);
+    const onData = jest.fn();
+    transport.onData(onData);
 
-    // Answer getPortInfo but not setLineCoding — command times out
-    ws.onSend = d => {
-      if (typeof d !== 'string') return;
-      const m = JSON.parse(d) as {type: string; command: string; id: number};
-      if (m.command === 'getPortInfo') {
-        ws.deliverText(
-          JSON.stringify({
-            type: 'response',
-            id: m.id,
-            error: null,
-            result: null,
-          }),
-        );
-      }
-    };
-    ws.fireOpen();
-    await tick(); // getPortInfo resolves; setLineCoding is now pending
-    // No crash — the timeout rejection is handled internally
+    const ws1 = FakeWebSocket.instances[0];
+    autoAnswer(ws1);
+    ws1.fireOpen();
+    await tick();
+    expect(onConnected).toHaveBeenCalledWith({reconnected: false});
+
+    ws1.fireClose();
+    await tick();
+
+    const ws2 = FakeWebSocket.instances[1];
+    autoAnswer(ws2);
+    ws2.fireOpen();
+    await tick();
+    expect(onConnected).toHaveBeenCalledWith({reconnected: true});
+
+    const connectedCalls = onConnected.mock.calls.length;
+    const dataCalls = onData.mock.calls.length;
+
+    // The old socket can still fire events, but the transport must ignore them.
+    ws1.fireOpen();
+    ws1.deliverBinary([1, 2, 3]);
+
+    expect(onConnected).toHaveBeenCalledTimes(connectedCalls);
+    expect(onData).toHaveBeenCalledTimes(dataCalls);
+    transport.disconnect();
+  });
+
+  it('handles error during session restore (#restoreSession throws) in #onOpen', async () => {
+    // #loadPortInfo silently swallows errors; only #restoreSession can throw into
+    // #onOpen's catch (line 230). #restoreSession throws when it has a session to restore
+    // (portOpen=true, lastLineCoding set) and the socket dies mid-command.
+    FakeWebSocket.instances = [];
+    const transport = new WebSocketSerialTransport('ws://test', {
+      WebSocket: FakeWebSocket as unknown as WebSocketCtor,
+      reconnectInitialDelayMs: 0,
+    });
+    createdTransports.push(transport);
+    const ws0 = FakeWebSocket.instances[0];
+    autoAnswer(ws0);
+    ws0.fireOpen();
+    await tick(); // transport is 'open'
+    await transport.open(1, 0, {baudRate: 115200}); // sets portOpen=true, lastLineCoding
+
+    // Drop ws0 → schedules 0ms reconnect
+    ws0.fireClose();
+    await tick(); // reconnect timer fires → #connect() → ws1 created
+
+    const ws1 = FakeWebSocket.instances[1];
+    // Don't set ws1.onSend — setLineCoding in #restoreSession will go unanswered
+    ws1.fireOpen(); // #onOpen → #restoreSession → sends setLineCoding (now in #pending)
+    ws1.fireClose(); // #failAll rejects setLineCoding → #restoreSession throws → line 230
+    await tick(); // #onOpen catch runs (line 230); reconnect timer also fires → ws2
+    expect(FakeWebSocket.instances).toHaveLength(3);
   });
 
   it('handles error in #probeAlive and triggers socket down', async () => {
@@ -709,19 +889,23 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
       WebSocket: FakeWebSocket as unknown as WebSocketCtor,
       reconnect: false,
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0];
-    autoAnswer(ws);
+    autoAnswer(ws); // answers getPortInfo during initial #onOpen
     ws.fireOpen();
-    await tick();
+    await tick(); // transport is now 'open'
 
-    // Now make getSignals fail by closing the socket
+    // Stop answering commands — getSignals will go unanswered
+    ws.onSend = () => {};
+
+    // Start findAllDrivers: #whenConnected resolves, #probeAlive sends getSignals
+    const driversPromise = transport.findAllDrivers();
+    await tick(); // getSignals is now pending with no answer
+    // Close socket: #failAll rejects getSignals → #probeAlive catch (lines 290-291)
+    // Then #handleSocketDown in catch → #terminate → state already 'closed' → line 323
     ws.fireClose();
-    await tick();
-
-    // findAllDrivers calls #probeAlive which should handle the error
-    const ports = await transport.findAllDrivers();
+    const ports = await driversPromise;
     expect(ports).toEqual([]);
-    expect(transport.connectionState).toBe('closed');
   });
 
   it('handles socket down when already closed', async () => {
@@ -730,6 +914,7 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
       WebSocket: FakeWebSocket as unknown as WebSocketCtor,
       reconnect: false,
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0];
     autoAnswer(ws);
     ws.fireOpen();
@@ -750,6 +935,7 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
       reconnectInitialDelayMs: 1000, // long delay so timer is active
       maxReconnectAttempts: 1,
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0];
     autoAnswer(ws);
     ws.fireOpen();
@@ -768,17 +954,21 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
     FakeWebSocket.instances = [];
     const transport = new WebSocketSerialTransport('ws://test', {
       WebSocket: FakeWebSocket as unknown as WebSocketCtor,
-      reconnectInitialDelayMs: 1000,
+      reconnectInitialDelayMs: 1000, // long delay so the timer stays pending
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0];
     autoAnswer(ws);
     ws.fireOpen();
     await tick();
 
     await transport.open(1, 0, {baudRate: 115200});
-    expect(transport.connectionState).toBe('open');
 
-    // close() calls #suspend which should clear any reconnect timer
+    // Close socket → schedules a 1000ms reconnect timer
+    ws.fireClose();
+    await tick(); // reconnect timer is now pending
+
+    // close() → #sendCommand stopReading → #suspend → clears the timer (lines 351-352)
     await transport.close(1, 0);
     expect(transport.connectionState).toBe('suspended');
   });
@@ -790,6 +980,7 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
       reconnect: false,
       connectTimeoutMs: 100,
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0];
     autoAnswer(ws);
     ws.fireOpen();
@@ -803,11 +994,32 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
     );
   });
 
+  it('disconnect() rejects pending #whenConnected waiters (lines 391-392, 408)', async () => {
+    FakeWebSocket.instances = [];
+    const transport = new WebSocketSerialTransport('ws://test', {
+      WebSocket: FakeWebSocket as unknown as WebSocketCtor,
+      reconnect: false,
+      connectTimeoutMs: 5000,
+    });
+    createdTransports.push(transport);
+    // Don't fire open — transport stays in 'connecting' state
+    // findAllDrivers calls #whenConnected which adds a waiter to #connectWaiters
+    const driversPromise = transport.findAllDrivers();
+    // disconnect() → #rejectWaiters(reason) → waiter.reject(reason) (line 408)
+    //   → clearTimeout(timer) (line 391), reject(e) (line 392)
+    transport.disconnect();
+    // findAllDrivers catches the rejection and returns []
+    const drivers = await driversPromise;
+    expect(drivers).toEqual([]);
+  });
+
   it('handles non-string, non-ArrayBuffer data in #onMessage', () => {
     FakeWebSocket.instances = [];
-    new WebSocketSerialTransport('ws://test', {
-      WebSocket: FakeWebSocket as unknown as WebSocketCtor,
-    });
+    createdTransports.push(
+      new WebSocketSerialTransport('ws://test', {
+        WebSocket: FakeWebSocket as unknown as WebSocketCtor,
+      }),
+    );
     const ws = FakeWebSocket.instances[0];
     autoAnswer(ws);
     ws.fireOpen();
@@ -829,6 +1041,7 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
       WebSocket: FakeWebSocket as unknown as WebSocketCtor,
       commandTimeoutMs: 5000,
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0];
     autoAnswer(ws);
     ws.fireOpen();
@@ -861,6 +1074,7 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
       WebSocket: FakeWebSocket as unknown as WebSocketCtor,
       reconnect: false,
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0];
     autoAnswer(ws);
     ws.fireOpen();
@@ -881,6 +1095,7 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
       WebSocket: FakeWebSocket as unknown as WebSocketCtor,
       reconnect: false,
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0];
     autoAnswer(ws);
     ws.fireOpen();
@@ -907,6 +1122,7 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
       WebSocket: FakeWebSocket as unknown as WebSocketCtor,
       reconnect: false,
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0];
     autoAnswer(ws);
     ws.fireOpen();
@@ -924,6 +1140,7 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
     const transport = new WebSocketSerialTransport('ws://test', {
       WebSocket: FakeWebSocket as unknown as WebSocketCtor,
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0];
     autoAnswer(ws);
     ws.fireOpen();
@@ -939,6 +1156,7 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
       WebSocket: FakeWebSocket as unknown as WebSocketCtor,
       reconnectInitialDelayMs: 1000,
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0];
     autoAnswer(ws);
     ws.fireOpen();
@@ -958,6 +1176,7 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
     const transport = new WebSocketSerialTransport('ws://test', {
       WebSocket: FakeWebSocket as unknown as WebSocketCtor,
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0];
     autoAnswer(ws);
     ws.fireOpen();
@@ -978,6 +1197,7 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
       reconnect: false,
       connectTimeoutMs: 50,
     });
+    createdTransports.push(transport);
     await expect(transport.open(1, 0, {baudRate: 115200})).rejects.toThrow(
       'Timed out waiting for the WebSocket connection.',
     );
@@ -990,6 +1210,7 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
       commandTimeoutMs: 5000,
       reconnect: false,
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0];
     autoAnswer(ws);
     ws.fireOpen();
@@ -1008,6 +1229,7 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
       WebSocket: FakeWebSocket as unknown as WebSocketCtor,
       reconnect: false,
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0];
     autoAnswer(ws);
     ws.fireOpen();
@@ -1032,6 +1254,7 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
       reconnectInitialDelayMs: 0,
       onReconnecting,
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0];
     autoAnswer(ws);
     ws.fireOpen();
@@ -1053,6 +1276,7 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
       reconnectInitialDelayMs: 0,
       onConnected,
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0];
     autoAnswer(ws);
     ws.fireOpen();
@@ -1080,6 +1304,7 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
       reconnect: false,
       onClosed,
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0];
     autoAnswer(ws);
     ws.fireOpen();
@@ -1098,6 +1323,7 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
       maxReconnectAttempts: 1,
       onClosed,
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0];
     autoAnswer(ws);
     ws.fireOpen();
@@ -1128,6 +1354,7 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
       WebSocket: ThrowingCtor as unknown as WebSocketCtor,
       reconnectInitialDelayMs: 0,
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0] as ThrowingCtor;
     autoAnswer(ws);
     ws.fireOpen();
@@ -1289,6 +1516,7 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
     const transport = new WebSocketSerialTransport('ws://test', {
       WebSocket: FakeWebSocket as unknown as WebSocketCtor,
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0];
     autoAnswer(ws);
 
@@ -1314,6 +1542,7 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
       WebSocket: FakeWebSocket as unknown as WebSocketCtor,
       reconnect: false,
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0];
     autoAnswer(ws);
     ws.fireOpen();
@@ -1435,6 +1664,7 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
       WebSocket: FakeWebSocket as unknown as WebSocketCtor,
       reconnect: false,
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0];
     ws.onSend = d => {
       if (typeof d !== 'string') return;
@@ -1476,6 +1706,7 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
       reconnect: false,
       commandTimeoutMs: 50,
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0];
     ws.onSend = d => {
       if (typeof d !== 'string') return;
@@ -1519,6 +1750,7 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
       commandTimeoutMs: 50,
       reconnect: false,
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0];
     autoAnswer(ws);
     ws.fireOpen();
@@ -1552,6 +1784,7 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
       WebSocket: FakeWebSocket as unknown as WebSocketCtor,
       reconnect: false,
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0];
     ws.onSend = d => {
       if (typeof d !== 'string') return;
@@ -1582,6 +1815,7 @@ describe('WebSocketSerialTransport — coverage gaps', () => {
       WebSocket: FakeWebSocket as unknown as WebSocketCtor,
       reconnect: false,
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0];
     ws.onSend = d => {
       if (typeof d !== 'string') return;
@@ -1690,6 +1924,7 @@ describe('end-to-end echo through Serial + bridge', () => {
     const transport = new WebSocketSerialTransport('ws://test', {
       WebSocket: FakeWebSocket as unknown as WebSocketCtor,
     });
+    createdTransports.push(transport);
     const ws = FakeWebSocket.instances[0];
     wireBridge(ws, new EchoSerial());
     ws.fireOpen();
