@@ -27,6 +27,9 @@
     "enabled": true,
     "rules": {
       "recommended": true,
+      "suspicious": {
+        "noTsIgnore": "off"
+      },
       "style": {
         "noNonNullAssertion": "off"
       }

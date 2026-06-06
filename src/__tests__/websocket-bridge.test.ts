@@ -2,7 +2,7 @@
  * Unit tests for the WebSocket bridge core ({@link attachBridge}) and CLI arg
  * parsing — exercised with fakes, no real `serialport`/`ws`/sockets.
  */
-import {describe, expect, it} from '@jest/globals';
+import {describe, expect, it, jest} from '@jest/globals';
 import {
   attachBridge,
   parseBridgeArgs,
@@ -19,6 +19,8 @@ class FakeSerial implements SerialLike {
   signals = {cts: true, dsr: false, dcd: true, ri: false};
   lastBaud = 0;
   flushed = 0;
+  drained = 0;
+  closed = false;
 
   on(event: string, listener: (...a: never[]) => void): void {
     this.#listeners[event] ??= [];
@@ -66,9 +68,11 @@ class FakeSerial implements SerialLike {
     cb?.(null);
   }
   drain(cb?: (err?: Error | null) => void): void {
+    this.drained++;
     cb?.(null);
   }
   close(cb?: (err?: Error | null) => void): void {
+    this.closed = true;
     this.emit('close');
     cb?.(null);
   }
@@ -89,6 +93,9 @@ class FakeWs implements WsLike {
   recvBinary(bytes: number[]): void {
     this.#onMessage?.(Uint8Array.from(bytes), true);
   }
+  recvRaw(data: unknown, isBinary: boolean): void {
+    this.#onMessage?.(data, isBinary);
+  }
   recvCommand(message: object): void {
     this.#onMessage?.(JSON.stringify(message), false);
   }
@@ -99,6 +106,13 @@ class FakeWs implements WsLike {
   }
   binary(): Uint8Array[] {
     return this.sent.filter((f): f is Uint8Array => f instanceof Uint8Array);
+  }
+}
+
+/** FakeSerial variant whose write() calls back with an error. */
+class FakeSerialWithWriteError extends FakeSerial {
+  override write(_data: Uint8Array, cb?: (err?: Error | null) => void): void {
+    queueMicrotask(() => cb?.(new Error('write failed')));
   }
 }
 
@@ -213,6 +227,101 @@ describe('attachBridge', () => {
       event: 'error',
       error: 'boom',
     });
+  });
+
+  it('drain command calls serial.drain and replies ok', async () => {
+    const serial = new FakeSerial();
+    const ws = new FakeWs();
+    attachBridge(serial, ws);
+
+    ws.recvCommand({type: 'command', id: 20, command: 'drain'});
+    await flush();
+
+    expect(serial.drained).toBe(1);
+    const rsp = ws.responses().find(r => r.id === 20);
+    expect(rsp?.error).toBeNull();
+  });
+
+  it('break command sets brk, waits for duration, then clears brk and replies', async () => {
+    const serial = new FakeSerial();
+    const ws = new FakeWs();
+    attachBridge(serial, ws);
+
+    // duration:0 → the clear fires on the next event-loop tick (via setTimeout 0)
+    ws.recvCommand({
+      type: 'command',
+      id: 21,
+      command: 'break',
+      args: {duration: 0},
+    });
+    expect(serial.brk).toBe(true); // set synchronously
+    await flush(); // fires the pending setTimeout(0)
+    expect(serial.brk).toBe(false); // cleared
+    const rsp = ws.responses().find(r => r.id === 21);
+    expect(rsp?.error).toBeNull();
+  });
+
+  it('close command calls serial.close and replies ok', async () => {
+    const serial = new FakeSerial();
+    const ws = new FakeWs();
+    attachBridge(serial, ws);
+
+    ws.recvCommand({type: 'command', id: 22, command: 'close'});
+    await flush();
+
+    expect(serial.closed).toBe(true);
+    const rsp = ws.responses().find(r => r.id === 22);
+    expect(rsp?.error).toBeNull();
+  });
+
+  it('unknown command replies with an error message', async () => {
+    const serial = new FakeSerial();
+    const ws = new FakeWs();
+    attachBridge(serial, ws);
+
+    ws.recvCommand({type: 'command', id: 23, command: 'nonexistent'});
+    await flush();
+
+    const rsp = ws.responses().find(r => r.id === 23);
+    expect(rsp?.error).toMatch(/unknown command: nonexistent/);
+  });
+
+  it('accepts binary frames sent as an ArrayBuffer (not just Uint8Array)', async () => {
+    const serial = new FakeSerial();
+    const ws = new FakeWs();
+    attachBridge(serial, ws);
+
+    const buf = new Uint8Array([0xde, 0xad, 0xbe]).buffer;
+    ws.recvRaw(buf, true);
+    await flush();
+
+    // EchoDevice echos back — but here FakeSerial echoes synchronously on write
+    expect(ws.binary()).toHaveLength(1);
+    expect(Array.from(ws.binary()[0])).toEqual([0xde, 0xad, 0xbe]);
+  });
+
+  it('accepts binary frames sent as a plain number array', async () => {
+    const serial = new FakeSerial();
+    const ws = new FakeWs();
+    attachBridge(serial, ws);
+
+    ws.recvRaw([0x11, 0x22], true);
+    await flush();
+
+    expect(ws.binary()).toHaveLength(1);
+    expect(Array.from(ws.binary()[0])).toEqual([0x11, 0x22]);
+  });
+
+  it('logs a write error via options.log when serial.write fails', async () => {
+    const serial = new FakeSerialWithWriteError();
+    const ws = new FakeWs();
+    const log = jest.fn();
+    attachBridge(serial, ws, {log});
+
+    ws.recvBinary([1, 2, 3]);
+    await flush();
+
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/write failed/));
   });
 });
 

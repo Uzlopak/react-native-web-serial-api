@@ -47,9 +47,6 @@ export type {
   MountSerialDeviceOptions,
 } from './mount';
 export {mountSerialDevice} from './mount';
-// The fluent host-side client (reader/writer/readBytes/readUntil/readLine/…).
-export type {ReadOptions, SerialClientOptions} from './serial-client';
-export {createSerialClient, SerialClient} from './serial-client';
 export type {
   DeviceIdentity,
   SerialDeviceHost,
@@ -64,6 +61,15 @@ export {
   SerialDevice,
   SilentDevice,
 } from './serial-device';
+// The fluent host-side client (reader/writer/readBytes/readUntil/readLine/…).
+export type {
+  ReadOptions,
+  SerialTestHarnessOptions,
+} from './serial-test-harness';
+export {
+  createSerialTestHarness,
+  SerialTestHarness,
+} from './serial-test-harness';
 // Runtime-agnostic suite runner: one suite, run in Jest + on-device + compare.
 export type {
   RunSerialTestsOptions,

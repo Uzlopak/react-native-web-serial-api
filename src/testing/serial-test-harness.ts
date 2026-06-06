@@ -1,5 +1,5 @@
 /**
- * A fluent request/response client over a {@link SerialPort} — the host-side
+ * A fluent request/response harness over a {@link SerialPort} — the host-side
  * driver every serial test otherwise hand-rolls (reader + writer, a pending
  * byte buffer, framed reads with timeouts). Works on ANY SerialPort: the
  * in-memory {@link VirtualSerialTransport}, a real USB device, or a
@@ -20,7 +20,7 @@ export type ReadOptions = {
   timeout?: number;
 };
 
-export type SerialClientOptions = {
+export type SerialTestHarnessOptions = {
   /** Default per-read timeout in ms. Default 2000. */
   defaultTimeoutMs?: number;
 };
@@ -36,7 +36,7 @@ function indexOfSubsequence(haystack: number[], needle: number[]): number {
   return -1;
 }
 
-export class SerialClient {
+export class SerialTestHarness {
   readonly #port: SerialPort;
   readonly #defaultTimeout: number;
 
@@ -50,7 +50,7 @@ export class SerialClient {
   /** Resolvers woken whenever #pending grows or the stream ends. */
   #waiters: Array<() => void> = [];
 
-  constructor(port: SerialPort, options: SerialClientOptions = {}) {
+  constructor(port: SerialPort, options: SerialTestHarnessOptions = {}) {
     this.#port = port;
     this.#defaultTimeout = options.defaultTimeoutMs ?? 2000;
   }
@@ -154,7 +154,7 @@ export class SerialClient {
 
   /** Write bytes (string → char codes & 0xff). */
   async write(data: number[] | Uint8Array | string): Promise<void> {
-    if (!this.#writer) throw new Error('SerialClient is not open.');
+    if (!this.#writer) throw new Error('SerialTestHarness is not open.');
     await this.#writer.write(Uint8Array.from(toBytes(data)));
   }
 
@@ -290,10 +290,10 @@ export class SerialClient {
   }
 }
 
-/** Create a {@link SerialClient} for any SerialPort (virtual, real, or WS). */
-export function createSerialClient(
+/** Create a {@link SerialTestHarness} for any SerialPort (virtual, real, or WS). */
+export function createSerialTestHarness(
   port: SerialPort,
-  options?: SerialClientOptions,
-): SerialClient {
-  return new SerialClient(port, options);
+  options?: SerialTestHarnessOptions,
+): SerialTestHarness {
+  return new SerialTestHarness(port, options);
 }

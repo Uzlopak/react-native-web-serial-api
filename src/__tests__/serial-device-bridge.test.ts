@@ -217,4 +217,12 @@ describe('exposeSerialDevice', () => {
     });
     expect(ex.url).toBe('ws://0.0.0.0:8091');
   });
+
+  it('lazy-loads the ws package when WebSocketServer option is omitted', async () => {
+    // No WebSocketServer option → exposeSerialDevice calls module.require('ws').
+    // ws IS installed as a dev dep, so this succeeds in the Jest/Node process.
+    const ex = exposeSerialDevice(new EchoDevice(FTDI), {port: 47199});
+    expect(ex.url).toBe('ws://localhost:47199');
+    await ex.close();
+  });
 });

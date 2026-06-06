@@ -7,7 +7,7 @@
  *   - against BOTH, then {@link compareResults} to prove the device matches
  *     the simulator case-for-case.
  *
- * Each test receives an opened, host-side {@link SerialClient}; by default one
+ * Each test receives an opened, host-side {@link SerialTestHarness}; by default one
  * client is shared across the whole suite (open once, close at the end), which
  * matches how a request/response protocol session behaves. Pass `shared: false`
  * to open and close a fresh client per test. The runner never throws — it
@@ -22,7 +22,7 @@
 
 import type {SerialOptions, SerialPort} from '../WebSerial';
 import {errorMessage} from './harness';
-import {SerialClient} from './serial-client';
+import {SerialTestHarness} from './serial-test-harness';
 
 export type SerialTestResult = {
   name: string;
@@ -32,8 +32,8 @@ export type SerialTestResult = {
 };
 
 /** One test case. `run` receives an already-opened client (typically per the
- * suite's {@link SerialTestClient}; `SerialClient` by default). */
-export type SerialTest<C = SerialClient> = {
+ * suite's {@link SerialTestClient}; `SerialTestHarness` by default). */
+export type SerialTest<C = SerialTestHarness> = {
   name: string;
   run(client: C): Promise<void>;
 };
@@ -49,30 +49,30 @@ export type SerialTestProgress = {
 /**
  * How to build (and tear down) the per-suite client from a port. Provide this to
  * run a higher-level protocol client (e.g. an HCI / NMEA framer built on a
- * {@link SerialClient}) instead of the raw client. `connect` must also open the
- * port; `disconnect` must release it (a `SerialClient.close()` does both).
+ * {@link SerialTestHarness}) instead of the raw client. `connect` must also open the
+ * port; `disconnect` must release it (a `SerialTestHarness.close()` does both).
  */
 export type SerialTestClient<C> = {
   connect(port: SerialPort): Promise<C>;
   disconnect(client: C): Promise<void>;
 };
 
-export type RunSerialTestsOptions<C = SerialClient> = {
+export type RunSerialTestsOptions<C = SerialTestHarness> = {
   /** `SerialOptions` for the default client's `open()`. Default {baudRate: 115200}. */
   open?: SerialOptions;
   /** Open/close a fresh client per test instead of sharing one. Default false. */
   shared?: boolean;
-  /** Build a protocol client over the port (defaults to an opened SerialClient). */
+  /** Build a protocol client over the port (defaults to an opened SerialTestHarness). */
   client?: SerialTestClient<C>;
   progress?: SerialTestProgress;
 };
 
 function defaultClientFactory(
   open?: SerialOptions,
-): SerialTestClient<SerialClient> {
+): SerialTestClient<SerialTestHarness> {
   return {
     async connect(port) {
-      const client = new SerialClient(port);
+      const client = new SerialTestHarness(port);
       await client.open(open);
       return client;
     },
@@ -85,7 +85,7 @@ function defaultClientFactory(
  * case. With the default (shared) client the port is opened once and closed at
  * the end; with `shared: false` each test gets a fresh open/close. Never throws.
  */
-export async function runSerialTests<C = SerialClient>(
+export async function runSerialTests<C = SerialTestHarness>(
   tests: SerialTest<C>[],
   port: SerialPort,
   options: RunSerialTestsOptions<C> = {},

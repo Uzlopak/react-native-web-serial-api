@@ -2,7 +2,7 @@
  * End-to-end proof that a device simulator exposed with `exposeSerialDevice`
  * over a REAL `ws` server can be driven by the REAL `WebSocketSerialTransport`
  * client — in one Node process, no emulator. This is the on-device E2E path
- * (app ⇄ ws ⇄ simulator) exercised without a device: the SAME `SerialClient`
+ * (app ⇄ ws ⇄ simulator) exercised without a device: the SAME `SerialTestHarness`
  * code and `runSerialTests` suite that run in-memory also run over the socket.
  */
 
@@ -14,8 +14,8 @@ import {
   type ExposedSerialDevice,
   exposeSerialDevice,
   runSerialTests,
-  SerialClient,
   type SerialTest,
+  SerialTestHarness,
 } from '../testing';
 import {Serial} from '../WebSerial';
 import {
@@ -67,7 +67,7 @@ describe('exposeSerialDevice ⇄ WebSocketSerialTransport (real sockets)', () =>
     });
     const serialPort = await connect(ex);
 
-    const client = new SerialClient(serialPort);
+    const client = new SerialTestHarness(serialPort);
     const opened = ex.whenOpened();
     await client.open({baudRate: 115200});
     await expect(opened).resolves.toMatchObject({baudRate: 115200});

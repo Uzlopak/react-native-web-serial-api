@@ -404,6 +404,73 @@ describe('WebSocketSerialTransport — reconnection', () => {
     expect(FakeWebSocket.instances).toHaveLength(1); // no new socket
     expect(transport.connectionState).toBe('closed');
   });
+
+  it('rejects open() with a timeout error when setLineCoding never gets a response', async () => {
+    FakeWebSocket.instances = [];
+    const transport = new WebSocketSerialTransport('ws://test', {
+      WebSocket: FakeWebSocket as unknown as WebSocketCtor,
+      commandTimeoutMs: 50,
+      reconnect: false,
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    // Answer only getPortInfo (from #loadPortInfo in #onOpen); let setLineCoding hang.
+    ws.onSend = d => {
+      if (typeof d !== 'string') return;
+      const m = JSON.parse(d) as {type: string; command: string; id: number};
+      if (m.command === 'getPortInfo') {
+        ws.deliverText(
+          JSON.stringify({
+            type: 'response',
+            id: m.id,
+            error: null,
+            result: null,
+          }),
+        );
+      }
+      // setLineCoding: intentionally not answered → command times out after 50 ms
+    };
+    ws.fireOpen();
+    await tick(); // let #onOpen settle (getPortInfo resolved synchronously)
+
+    await expect(
+      transport.open(1, 0, {baudRate: 115200, dataBits: 8, parity: 1}),
+    ).rejects.toThrow(/timed out/);
+  }, 5000);
+
+  it('stays stable and reaches open state after 10 rapid drop/reconnect cycles', async () => {
+    FakeWebSocket.instances = [];
+    const transport = new WebSocketSerialTransport('ws://test', {
+      WebSocket: FakeWebSocket as unknown as WebSocketCtor,
+      reconnectInitialDelayMs: 0,
+    });
+
+    for (let i = 0; i < 10; i++) {
+      const ws = FakeWebSocket.instances[i];
+      autoAnswer(ws);
+      ws.fireOpen();
+      await tick();
+      ws.fireClose();
+      await tick();
+    }
+
+    // Final reconnect should succeed.
+    const wsFinal = FakeWebSocket.instances[10];
+    autoAnswer(wsFinal);
+    wsFinal.fireOpen();
+    await tick();
+
+    expect(transport.connectionState).toBe('open');
+    expect(FakeWebSocket.instances).toHaveLength(11);
+
+    // Disconnects fired during the cycles must not have accumulated into the
+    // listener set — only the explicitly registered listener fires once.
+    const onDisconnect = jest.fn();
+    transport.onDisconnect(onDisconnect);
+    wsFinal.fireClose();
+    await tick();
+    expect(onDisconnect.mock.calls.length).toBeLessThanOrEqual(1);
+  });
 });
 
 // ── end-to-end: Serial → WebSocketSerialTransport → bridge → echo serial ──────

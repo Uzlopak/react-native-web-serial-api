@@ -1,6 +1,6 @@
 /**
  * Tiny, dependency-free test helpers for driving serial devices — shared by the
- * library's own conformance suite, the {@link SerialClient}, and consumers' app
+ * library's own conformance suite, the {@link SerialTestHarness}, and consumers' app
  * tests. Free of `jest` and `react-native`, so they run under any test runner
  * and on a real device (e.g. an on-device Self-Test screen).
  */

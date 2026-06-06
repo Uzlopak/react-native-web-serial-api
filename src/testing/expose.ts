@@ -89,8 +89,8 @@ function loadWebSocketServer(): WebSocketServerCtor {
     typeof module !== 'undefined' &&
     // @ts-ignore
     typeof (module as {require?: unknown}).require === 'function'
-    // @ts-ignore
-      ? (module as {require: (id: string) => unknown}).require.bind(module)
+      ? // @ts-ignore
+        (module as {require: (id: string) => unknown}).require.bind(module)
       : undefined;
   if (!nodeRequire) {
     throw new Error(

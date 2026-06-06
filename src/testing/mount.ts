@@ -6,7 +6,7 @@
  *   - `serial`/`port` — what the app-under-test consumes,
  *   - `serialDevice` (typed) + `device` handle — drive the device (inject data,
  *     move the GPS, inject faults),
- *   - `client` — a host-side {@link SerialClient} (for protocol tests), and
+ *   - `client` — a host-side {@link SerialTestHarness} (for protocol tests), and
  *   - `whenOpened()/whenClosed()` — `await` the app connecting.
  *
  * @example Test how your app reacts to a device event
@@ -20,8 +20,8 @@
 import {setUsbSerial} from '../UsbSerial';
 import type {SerialPort} from '../WebSerial';
 import {Serial} from '../WebSerial';
-import {SerialClient} from './serial-client';
 import type {SerialDevice, SerialDeviceOpenOptions} from './serial-device';
+import {SerialTestHarness} from './serial-test-harness';
 import type {
   VirtualSerialDeviceOptions,
   VirtualSerialTransportOptions,
@@ -42,7 +42,7 @@ export type MountSerialDeviceOptions = {
   hasPermission?: boolean;
   /** Also `setUsbSerial(transport)` so a running app's `serial` sees it. Default false. */
   installGlobally?: boolean;
-  /** Options for the host-side {@link SerialClient}. */
+  /** Options for the host-side {@link SerialTestHarness}. */
   client?: {defaultTimeoutMs?: number};
 };
 
@@ -55,7 +55,7 @@ export type MountedSerialDevice<D extends SerialDevice = SerialDevice> = {
   /** The concrete device simulator, typed (e.g. call `gps.update(...)`). */
   serialDevice: D;
   /** A host-side client bound to `port` — NOT opened (call `client.open()`). */
-  client: SerialClient;
+  client: SerialTestHarness;
   /** Resolve when the app opens the port (now if already open). */
   whenOpened(): Promise<SerialDeviceOpenOptions>;
   /** Resolve when the app closes the port (now if not open). */
@@ -68,7 +68,7 @@ export type MountedSerialDevices = {
   ports: SerialPort[];
   devices: VirtualSerialDevice[];
   serialDevices: SerialDevice[];
-  clients: SerialClient[];
+  clients: SerialTestHarness[];
   /** Resolve when device `index` opens, or any device when `index` is omitted. */
   whenOpened(index?: number): Promise<SerialDeviceOpenOptions>;
   /** Resolve when device `index` closes, or any device when `index` is omitted. */
@@ -106,7 +106,9 @@ export async function mountSerialDevice(
   const ports = await serial.getPorts();
   const clients = ports.map(
     p =>
-      new SerialClient(p, {defaultTimeoutMs: options.client?.defaultTimeoutMs}),
+      new SerialTestHarness(p, {
+        defaultTimeoutMs: options.client?.defaultTimeoutMs,
+      }),
   );
 
   if (!Array.isArray(deviceOrDevices)) {

@@ -9,8 +9,8 @@ import {
   LineDevice,
   mountSerialDevice,
   runSerialTests,
-  SerialClient,
   type SerialTest,
+  SerialTestHarness,
   type SerialTestResult,
 } from '../testing';
 
@@ -27,7 +27,7 @@ describe('runSerialTests', () => {
   const tests: SerialTest[] = [
     {
       name: 'ping round-trips',
-      async run(c: SerialClient) {
+      async run(c: SerialTestHarness) {
         await c.write('PING\n');
         if ((await c.readLine()) !== 'PONG') throw new Error('no pong');
       },
@@ -113,9 +113,9 @@ describe('runSerialTests', () => {
     expect(results[0].error).toContain('cannot open');
   });
 
-  it('drives a custom protocol client built on the SerialClient', async () => {
+  it('drives a custom protocol client built on the SerialTestHarness', async () => {
     const {port} = await mountSerialDevice(new PingDevice());
-    // A trivial "protocol client" that wraps a SerialClient.
+    // A trivial "protocol client" that wraps a SerialTestHarness.
     type Pinger = {ping(): Promise<string>; close(): Promise<void>};
     const pingerTests: SerialTest<Pinger>[] = [
       {
@@ -128,7 +128,7 @@ describe('runSerialTests', () => {
     const results = await runSerialTests(pingerTests, port, {
       client: {
         async connect(p) {
-          const inner = new SerialClient(p);
+          const inner = new SerialTestHarness(p);
           await inner.open();
           return {
             async ping() {

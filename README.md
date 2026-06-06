@@ -253,7 +253,7 @@ npm test               # unit + WPT conformance suites
 npm run test:coverage  # coverage report (HTML in coverage/lcov-report)
 ```
 
-See **[TESTING.md](TESTING.md)** for the full guide (authoring a `SerialDevice`, the conformance/WPT suites, on-device E2E, and coverage).
+See **[TESTING.md](TESTING.md)** for the full guide: authoring a `SerialDevice`, `SerialTestHarness` (fluent test driver), `mountSerialDevice` (one-call fixture with `whenOpened`/`whenClosed`), fault injection, `runSerialTests` + `compareResults` (one suite, two runtimes), `exposeSerialDevice` (WebSocket E2E against a real app), the conformance/WPT suites, and coverage.
 
 ## Remote serial over WebSocket
 

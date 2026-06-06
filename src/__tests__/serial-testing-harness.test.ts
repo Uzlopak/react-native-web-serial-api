@@ -1,13 +1,15 @@
 /**
  * Tests for the shipped consumer testing API: `mountSerialDevice`, the fluent
- * `SerialClient`, and `whenOpened/whenClosed`.
+ * `SerialTestHarness`, and `whenOpened/whenClosed`.
  */
 import {describe, expect, it} from '@jest/globals';
 import {
+  createSerialTestHarness,
   EchoDevice,
   LineDevice,
   mountSerialDevice,
   SerialDevice,
+  SerialTestHarness,
   SilentDevice,
 } from '../testing';
 
@@ -29,7 +31,7 @@ class PushDevice extends SerialDevice {
   }
 }
 
-describe('mountSerialDevice + SerialClient', () => {
+describe('mountSerialDevice + SerialTestHarness', () => {
   it('round-trips a line protocol (test-as-host)', async () => {
     const {client} = await mountSerialDevice(new CommandDevice());
     await client.open({baudRate: 115200});
@@ -47,6 +49,27 @@ describe('mountSerialDevice + SerialClient', () => {
     await client.open();
     await client.write([1, 2, 3, 4, 5]);
     expect(Array.from(await client.readBytes(5))).toEqual([1, 2, 3, 4, 5]);
+    await client.close();
+  });
+
+  it('readUntil with empty delimiter consumes zero bytes and leaves buffer intact', async () => {
+    const {client, serialDevice} = await mountSerialDevice(new PushDevice());
+    await client.open();
+    serialDevice.emit([1, 2, 3]);
+    const got = await client.readUntil([]);
+    expect(Array.from(got)).toEqual([]); // 0 bytes consumed
+    const rest = await client.readBytes(3);
+    expect(Array.from(rest)).toEqual([1, 2, 3]); // buffer untouched
+    await client.close();
+  });
+
+  it('readUntil finds a multi-byte delimiter at the very end of the buffer', async () => {
+    // Guards the i + needle.length <= haystack.length boundary condition
+    const {client, serialDevice} = await mountSerialDevice(new PushDevice());
+    await client.open();
+    serialDevice.emit([0x01, 0x02, 0xc0, 0xc0]);
+    const got = await client.readUntil([0xc0, 0xc0]);
+    expect(Array.from(got)).toEqual([0x01, 0x02, 0xc0, 0xc0]);
     await client.close();
   });
 
@@ -150,5 +173,102 @@ describe('mountSerialDevice (multiple devices)', () => {
     await ports[1].open({baudRate: 9600});
     await expect(opened).resolves.toMatchObject({baudRate: 9600});
     await ports[1].close();
+  });
+
+  it('whenOpened(index) resolves immediately when the port is already open', async () => {
+    const {ports, whenOpened} = await mountSerialDevice([
+      new EchoDevice({usbVendorId: 0x0403, usbProductId: 0x6001}),
+      new EchoDevice({usbVendorId: 0x10c4, usbProductId: 0xea60}),
+    ]);
+    await ports[0].open({baudRate: 9600});
+    // Called AFTER open — fast-return path in mount.ts
+    await expect(whenOpened(0)).resolves.toMatchObject({baudRate: 9600});
+    await ports[0].close();
+  });
+});
+
+describe('SerialTestHarness — coverage gaps', () => {
+  it('close() during a blocked readBytes() resolves with whatever was buffered', async () => {
+    const {client, serialDevice} = await mountSerialDevice(new PushDevice());
+    await client.open();
+    serialDevice.emit([1, 2]);
+    // Let the pump deliver the 2 bytes before starting the blocked read.
+    await new Promise(r => setTimeout(r, 0));
+    const readPromise = client.readBytes(10); // needs 10, only 2 available
+    await client.close(); // must unblock the read
+    expect(Array.from(await readPromise)).toEqual([1, 2]);
+  });
+
+  it('readBytes timeout message includes the byte count', async () => {
+    const {client} = await mountSerialDevice(new SilentDevice());
+    await client.open();
+    await expect(client.readBytes(5, {timeout: 50})).rejects.toThrow(
+      /timed out reading 5 bytes/,
+    );
+    await client.close();
+  });
+
+  it('readUntil timeout message is descriptive', async () => {
+    const {client} = await mountSerialDevice(new SilentDevice());
+    await client.open();
+    await expect(client.readUntil([0x00], {timeout: 50})).rejects.toThrow(
+      /timed out reading until/,
+    );
+    await client.close();
+  });
+
+  it('readLine timeout message is descriptive', async () => {
+    const {client} = await mountSerialDevice(new SilentDevice());
+    await client.open();
+    await expect(client.readLine({timeout: 50})).rejects.toThrow(
+      /timed out reading until/,
+    );
+    await client.close();
+  });
+
+  it('readMatching timeout message is descriptive', async () => {
+    const {client} = await mountSerialDevice(new SilentDevice());
+    await client.open();
+    await expect(
+      client.readMatching(() => false, {timeout: 50}),
+    ).rejects.toThrow(/timed out waiting for a frame/);
+    await client.close();
+  });
+
+  it('readAvailable timeout message is descriptive', async () => {
+    const {client} = await mountSerialDevice(new SilentDevice());
+    await client.open();
+    await expect(client.readAvailable({timeout: 50})).rejects.toThrow(
+      /timed out waiting for data/,
+    );
+    await client.close();
+  });
+
+  it('expectIdle resolves when the stream ends with no data during the window', async () => {
+    const {client, device} = await mountSerialDevice(new SilentDevice());
+    await client.open();
+    device.detach(); // stream ends, nothing buffered
+    await expect(client.expectIdle(100)).resolves.toBeUndefined();
+  });
+
+  it('isOpen is false before open() and true after', async () => {
+    const {port} = await mountSerialDevice(new EchoDevice());
+    const client = new SerialTestHarness(port);
+    expect(client.isOpen).toBe(false);
+    await client.open();
+    expect(client.isOpen).toBe(true);
+    // Second open() is idempotent — no throw, still open
+    await client.open();
+    expect(client.isOpen).toBe(true);
+    await client.close();
+    expect(client.isOpen).toBe(false);
+  });
+
+  it('createSerialTestHarness returns a SerialTestHarness instance', async () => {
+    const {port} = await mountSerialDevice(new EchoDevice());
+    const client = createSerialTestHarness(port);
+    expect(client).toBeInstanceOf(SerialTestHarness);
+    await client.open();
+    await client.close();
   });
 });

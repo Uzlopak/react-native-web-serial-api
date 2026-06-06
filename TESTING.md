@@ -161,6 +161,334 @@ repo's [`jest.config.js`](jest.config.js).
 
 ---
 
+## Testing as the host: `SerialTestHarness`
+
+`SerialTestHarness` is a fluent, timeout-aware wrapper around any `SerialPort` (virtual,
+real-USB, or WebSocket-backed). It eliminates the boilerplate of managing
+`ReadableStream` readers/writers in test code.
+
+```ts
+import {SerialTestHarness} from 'react-native-web-serial-api/testing';
+
+const client = new SerialTestHarness(port);
+await client.open({baudRate: 115200});
+
+await client.write([0x01, 0x02, 0x03]);
+
+// Read exactly N bytes (waits for partial chunks to arrive):
+const echo = await client.readBytes(3);           // Uint8Array
+
+// Read until a byte sequence appears (returns all bytes up to and including it):
+const frame = await client.readUntil([0xC0]);     // SLIP/COBS frame end
+
+// Read a line terminated by \n (strips \r):
+const line = await client.readLine();             // string
+
+// Feed a custom framing decoder (returns when predicate returns a byte count):
+const msg = await client.readMatching(buf => {
+  if (buf.length < 4) return false;               // need header first
+  const len = (buf[2] << 8) | buf[3];
+  return buf.length >= 4 + len ? 4 + len : false; // full frame
+});
+
+// Read whatever bytes have arrived (useful to feed SLIP/HCI/COBS decoders):
+const chunk = await client.readAvailable();       // Uint8Array; waits for ≥1 byte
+
+// Assert silence for a window:
+await client.expectIdle(100);                     // rejects if bytes arrive
+
+await client.close(); // idempotent; releases locks
+```
+
+All read methods accept `{timeout?: number}` (default 5 s).
+
+### Building a protocol client on `SerialTestHarness`
+
+`readAvailable` is the right primitive for a framing decoder that accumulates
+bytes until a complete message appears:
+
+```ts
+import {SerialTestHarness} from 'react-native-web-serial-api/testing';
+import {SlipDecoder} from './slip';
+
+class MyProtocolClient {
+  #client: SerialTestHarness;
+  #pending: MyMessage[] = [];
+
+  static async open(port: SerialPort, baudRate = 115200) {
+    const c = new MyProtocolClient(new SerialTestHarness(port));
+    await c.#client.open({baudRate});
+    return c;
+  }
+  private constructor(client: SerialTestHarness) { this.#client = client; }
+
+  async recv(timeoutMs = 5000): Promise<MyMessage> {
+    if (this.#pending.length) return this.#pending.shift()!;
+    const decoder = new SlipDecoder();
+    while (!this.#client.ended) {
+      const chunk = await this.#client.readAvailable({timeout: timeoutMs});
+      for (const frame of decoder.feed(chunk)) {
+        this.#pending.push(parseHci(frame));
+      }
+      if (this.#pending.length) return this.#pending.shift()!;
+    }
+    throw new Error('port closed before message arrived');
+  }
+
+  async close() { await this.#client.close(); }
+}
+```
+
+---
+
+## One-call fixture: `mountSerialDevice`
+
+`mountSerialDevice` wires up a `SerialDevice` in a single call and returns every
+handle you need in a test:
+
+```ts
+import {mountSerialDevice, SerialTestHarness} from 'react-native-web-serial-api/testing';
+import {WMBusGateway} from './devices/wmbus/WMBusGateway';
+
+const {port, device, serialDevice, whenOpened, whenClosed} =
+  await mountSerialDevice(new WMBusGateway('iU891A-XL'));
+
+// host side — open the port and start talking
+const client = new SerialTestHarness(port);
+const opened = whenOpened();     // capture the promise before open()
+await client.open({baudRate: 115200});
+await opened;                    // resolves once the device processes onOpen()
+
+// device side — drive the simulator
+serialDevice.addMeter(meter);
+meter.sendTelegram();            // device emits a 0x20 frame
+const frame = await client.readBytes(frameLen);
+
+// close
+await whenClosed();
+await client.close();
+```
+
+Multiple devices at once:
+
+```ts
+const {ports, transport} = await mountSerialDevice([
+  new WMBusGateway('iU891A-XL'),
+  new NmeaGpsDevice(),
+]);
+// ports[0] → gateway, ports[1] → GPS
+```
+
+`opts.installGlobally = true` calls `setUsbSerial(transport)` so the singleton
+`serial` also uses the virtual transport (call `resetUsbSerial()` in teardown).
+
+---
+
+## Lifecycle awaiting: `whenOpened` / `whenClosed`
+
+Both `mountSerialDevice` and the lower-level `VirtualSerialDevice` expose
+`whenOpened()` / `whenClosed()` so a test can synchronise with the app rather
+than polling:
+
+```ts
+const device = transport.addDevice(new MyDevice(), {hasPermission: true});
+
+// Resolves the next time (or immediately if already open):
+const opts = await device.whenOpened(); // {baudRate, dataBits, …}
+
+// Resolves the next time the port is closed (or detached while open):
+await device.whenClosed();
+```
+
+The promises are one-shot per call — each `whenOpened()`/`whenClosed()` call
+returns a fresh promise for the *next* transition, so you can chain them:
+
+```ts
+await device.whenOpened();
+meter.sendTelegram();
+await device.whenClosed();
+// Reconnect cycle:
+await device.whenOpened();
+```
+
+---
+
+## Fault injection
+
+`VirtualSerialDevice` has a rich set of fault-injection handles:
+
+```ts
+device.push([0x01, 0x02]);         // device sends bytes to the host unprompted
+device.emitError('cable fault');   // raises an error on the readable stream
+
+device.failNext('open');           // next open() rejects once, then returns to normal
+device.failNext('write');          // next write rejects
+device.failNext('startReading');   // next startReading rejects
+device.overrunAfter(16);           // after 16 bytes a BufferOverrunError fires
+device.loseDevice();               // simulate unplug while open
+device.detach();                   // fires "disconnect" (closes open port first)
+device.attach();                   // re-attach (new deviceId, fires "connect")
+
+device.written;                    // number[][] — every frame the host wrote
+device.isOpen;                     // whether the port is currently open
+```
+
+Combine with `expect` for protocol-level assertions:
+
+```ts
+device.failNext('write');
+await expect(client.write([1, 2])).rejects.toThrow();
+expect(device.written).toHaveLength(0); // nothing got through
+```
+
+---
+
+## Writing a test suite: `runSerialTests` + `compareResults`
+
+`runSerialTests` runs an array of named tests against a port and returns
+structured results — no test-runner dependency, so the same suite runs in Jest
+(virtual port) **and on a real device** (USB or WebSocket):
+
+```ts
+import {runSerialTests, compareResults, type SerialTest}
+  from 'react-native-web-serial-api/testing';
+
+const suite: SerialTest[] = [
+  {
+    name: 'echoes 4 bytes',
+    async run(client) {
+      await client.write([1, 2, 3, 4]);
+      const echo = await client.readBytes(4);
+      if (!echo.every((b, i) => b === [1, 2, 3, 4][i]))
+        throw new Error(`echo mismatch: got ${Array.from(echo)}`);
+    },
+  },
+];
+
+// Run against the virtual device:
+const {port} = await mountSerialDevice(new EchoDevice(id));
+const ref = await runSerialTests(suite, port, {open: {baudRate: 115200}});
+
+// Run against the real device:
+const real = await runSerialTests(suite, realPort, {open: {baudRate: 115200}});
+
+// Pass only tests where BOTH runtimes agree (both passed or both failed):
+const agreed = compareResults(ref, real);
+```
+
+`runSerialTests` options:
+
+| Option | Default | Meaning |
+|--------|---------|---------|
+| `open` | `{baudRate:9600}` | Options forwarded to `port.open()` |
+| `shared` | `true` | One `SerialTestHarness` for all tests; `false` opens/closes per test |
+| `client` | — | Custom `{connect, disconnect}` pair for protocol clients (see below) |
+| `progress` | — | `{onStart?, onResult?}` callbacks for live UI updates |
+
+### Custom protocol client
+
+Pass `options.client` to use a custom client type with your suite (the same
+client is passed to every `run` function):
+
+```ts
+import {runSerialTests, type SerialTestClient}
+  from 'react-native-web-serial-api/testing';
+import {HciHost} from './HciHost';
+
+const results = await runSerialTests(hciSuite, port, {
+  open: {baudRate: 115200},
+  client: {
+    connect: (p) => HciHost.open(p),
+    disconnect: (h) => h.close(),
+  } satisfies SerialTestClient<HciHost>,
+});
+```
+
+---
+
+## WebSocket E2E: `exposeSerialDevice`
+
+`exposeSerialDevice` runs a `SerialDevice` simulator behind a real `ws`
+WebSocket server, so a real app (on a device, an emulator, or the browser) can
+connect to it with `new Serial(new WebSocketSerialTransport(url))` and exercise
+the *same* simulated peripheral your Jest tests drive.
+
+The test process keeps both handles: the `SerialDevice` (to drive the device
+side) and the server URL (for the app to connect to). The same device-specific
+suite can therefore run in two modes without any code changes:
+
+```ts
+// Jest (in-memory) ────────────────────────────────────────────────────────
+import {mountSerialDevice, runSerialTests} from 'react-native-web-serial-api/testing';
+
+const {port} = await mountSerialDevice(new WMBusGateway('iU891A-XL'));
+const results = await runSerialTests(wmbusSuite, port, {open: {baudRate: 115200}});
+
+// On-device / emulator (real WebSocket) ──────────────────────────────────
+import {exposeSerialDevice} from 'react-native-web-serial-api/testing';
+import {WebSocketServer} from 'ws';   // optional dep: npm i -D ws
+
+const ex = exposeSerialDevice(new WMBusGateway('iU891A-XL'), {
+  port: 8090,
+  WebSocketServer,
+  // host: '0.0.0.0',  // use this for a physical device or emulator
+});
+// app connects with: new Serial(new WebSocketSerialTransport('ws://10.0.2.2:8090'))
+await ex.whenOpened();
+const results = await runSerialTests(wmbusSuite, appPort, {open: {baudRate: 115200}});
+await ex.close();
+```
+
+`ExposedSerialDevice` fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `url` | `string` | `ws://host:port` — pass to `WebSocketSerialTransport` |
+| `serialDevice` | `D` | The concrete simulator (typed — call `gateway.addMeter`, etc.) |
+| `device` | `VirtualSerialDevice` | Low-level handle (push/emitError/whenOpened/…) |
+| `whenOpened()` | `Promise<SerialDeviceOpenOptions>` | Resolves when the app opens the port |
+| `whenClosed()` | `Promise<void>` | Resolves when the app closes the port |
+| `close()` | `Promise<void>` | Stops the WebSocket server |
+
+`ws` is loaded lazily (via an indirect `require` the bundler cannot trace), so
+importing from `react-native-web-serial-api/testing` is safe in a React Native
+app — `ws` is only pulled in when `exposeSerialDevice` is actually called in a
+Node process. Pass `options.WebSocketServer` to skip the lazy load entirely
+(recommended in tests, since you control the import at the top of the file).
+
+---
+
+## Fake-timer gotcha
+
+`VirtualSerialTransport` delivers data via `queueMicrotask` (at `latencyMs:0`,
+the default). If your test uses `jest.useFakeTimers()`, microtasks still run
+fine — but `SerialTestHarness`'s read timeouts use `setTimeout`, so **fake timers
+will stall reads unless you advance them**.
+
+If your suite uses `setInterval` for periodic streaming, always opt out of
+faking `queueMicrotask`:
+
+```ts
+beforeAll(() => {
+  jest.useFakeTimers({
+    doNotFake: ['queueMicrotask'],
+  });
+});
+
+it('streams data periodically', async () => {
+  // ...start the device timer...
+  jest.advanceTimersByTime(5000);  // fire the interval
+  const line = await client.readLine();
+  // ...
+});
+```
+
+If your tests don't use `setInterval` or per-second streaming, you typically
+don't need fake timers at all — real `setTimeout` in `SerialTestHarness` ensures
+that timeouts resolve (or reject) without any manual advancing.
+
+---
+
 ## The conformance suite (one suite, two runtimes)
 
 [`src/__tests__/conformance-suite.ts`](src/__tests__/conformance-suite.ts) exports
