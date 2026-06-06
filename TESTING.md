@@ -253,22 +253,30 @@ class MyProtocolClient {
 handle you need in a test:
 
 ```ts
-import {createDeviceFixture, SerialClient} from 'react-native-web-serial-api/testing';
+import {createDeviceFixture} from 'react-native-web-serial-api/testing';
 import {WMBusGateway} from './devices/wmbus/WMBusGateway';
+import {WMBusMeter} from './devices/wmbus/WMBusMeter';
 
-const {port, device, SimulatedDevice, whenOpened, whenClosed} =
+const ADDRESS = {
+  manufacturerId: 0x1234,
+  deviceId: 0x56789abc,
+  version: 0x01,
+  type: 0x07,
+};
+
+const {client, simulatedDevice, whenOpened, whenClosed} =
   await createDeviceFixture(new WMBusGateway('iU891A-XL'));
 
 // host side — open the port and start talking
-const client = new SerialClient(port);
 const opened = whenOpened();     // capture the promise before open()
 await client.open({baudRate: 115200});
 await opened;                    // resolves once the device processes onOpen()
 
 // device side — drive the simulator
-SimulatedDevice.addMeter(meter);
+const meter = new WMBusMeter({address: ADDRESS, payloadTemplate: [0x01]});
+simulatedDevice.addMeter(meter);
 meter.sendTelegram();            // device emits a 0x20 frame
-const frame = await client.readBytes(frameLen);
+const frame = await client.readAvailable();
 
 // close
 await whenClosed();
@@ -311,7 +319,7 @@ returns a fresh promise for the *next* transition, so you can chain them:
 
 ```ts
 await device.whenOpened();
-meter.sendTelegram();
+device.push([0x20, 0x01, 0x02]);
 await device.whenClosed();
 // Reconnect cycle:
 await device.whenOpened();
@@ -372,7 +380,7 @@ const suite: SerialTest[] = [
 ];
 
 // Run against the virtual device:
-const {port} = await createDeviceFixture(new LoopbackDevice(id));
+const {port} = await createDeviceFixture(new LoopbackDevice());
 const ref = await runTestSuite(suite, port, {open: {baudRate: 115200}});
 
 // Run against the real device:
@@ -397,7 +405,7 @@ Pass `options.client` to use a custom client type with your suite (the same
 client is passed to every `run` function):
 
 ```ts
-import {runTestSuite, type SerialTestClient}
+import {runTestSuite, type TestClient}
   from 'react-native-web-serial-api/testing';
 import {HciHost} from './HciHost';
 
@@ -406,15 +414,15 @@ const results = await runTestSuite(hciSuite, port, {
   client: {
     connect: (p) => HciHost.open(p),
     disconnect: (h) => h.close(),
-  } satisfies SerialTestClient<HciHost>,
+  } satisfies TestClient<HciHost>,
 });
 ```
 
 ---
 
-## WebSocket E2E: `exposeSerialDevice`
+## WebSocket E2E: `exposeSimulatedDevice`
 
-`exposeSerialDevice` runs a `SimulatedDevice` simulator behind a real `ws`
+`exposeSimulatedDevice` runs a `SimulatedDevice` simulator behind a real `ws`
 WebSocket server, so a real app (on a device, an emulator, or the browser) can
 connect to it with `new Serial(new WebSocketSerialTransport(url))` and exercise
 the *same* simulated peripheral your Jest tests drive.
@@ -431,10 +439,10 @@ const {port} = await createDeviceFixture(new WMBusGateway('iU891A-XL'));
 const results = await runTestSuite(wmbusSuite, port, {open: {baudRate: 115200}});
 
 // On-device / emulator (real WebSocket) ──────────────────────────────────
-import {exposeSerialDevice} from 'react-native-web-serial-api/testing';
+import {exposeSimulatedDevice} from 'react-native-web-serial-api/testing';
 import {WebSocketServer} from 'ws';   // optional dep: npm i -D ws
 
-const ex = exposeSerialDevice(new WMBusGateway('iU891A-XL'), {
+const ex = exposeSimulatedDevice(new WMBusGateway('iU891A-XL'), {
   port: 8090,
   WebSocketServer,
   // host: '0.0.0.0',  // use this for a physical device or emulator
@@ -458,8 +466,8 @@ await ex.close();
 
 `ws` is loaded lazily (via an indirect `require` the bundler cannot trace), so
 importing from `react-native-web-serial-api/testing` is safe in a React Native
-app — `ws` is only pulled in when `exposeSerialDevice` is actually called in a
-Node process. Pass `options.WebSocketServer` to skip the lazy load entirely
+app — `ws` is only pulled in when `exposeSimulatedDevice` is actually called in
+a Node process. Pass `options.WebSocketServer` to skip the lazy load entirely
 (recommended in tests, since you control the import at the top of the file).
 
 ---
@@ -557,16 +565,17 @@ The [example app](example) ships two ways to test on real hardware (or none):
 - **Self Test screen** (overflow menu → *Self test…*) runs the conformance suite
   in-app and shows pass/fail, plus a *Run on connected device* smoke test. This
   works on Android, web, and in an emulator with **no device attached**.
-- **Virtual device (demo)** toggle (overflow menu) injects a
-  `InMemorySerialTransport` (an FTDI `LoopbackDevice` + a CP210x `SensorDevice`, both
-  authored as `SimulatedDevice`s — see [example/src/devices/](example/src/devices))
-  so the whole Devices → Connect → Terminal flow runs hardware-free.
+- **Virtual device (demo)** toggle (overflow menu) injects an
+  `InMemorySerialTransport` with simulated devices (for example an FTDI
+  `LoopbackDevice` plus a CP210x `SensorDevice`, both authored as
+  `SimulatedDevice`s — see [example/src/devices/](example/src/devices)) so the
+  whole Devices → Connect → Terminal flow runs hardware-free.
 
 > **Platform note:** demo mode redirects the app's live serial, which only works
 > on Android (where `serial` is this library's polyfill). On web `serial` is the
 > browser's native `navigator.serial`, which the library cannot inject into — but
 > the Self-Test screen still works everywhere because it builds its own
-> `new Serial(virtualTransport)`.
+> `new Serial(new InMemorySerialTransport())`.
 
 ---
 
@@ -577,17 +586,20 @@ USB hardware. Install the mock once at startup behind your own flag:
 
 ```ts
 // index.js — debug/E2E build only
-import {installSerialMock, LoopbackDevice} from 'react-native-web-serial-api/testing';
+import {
+  LoopbackDevice,
+  installInMemorySerialTransport,
+} from 'react-native-web-serial-api/testing';
 import {MyThermometer} from './devices/MyThermometer';
 
-installSerialMock({
+installInMemorySerialTransport({
   enabled: process.env.RNWS_SERIAL_MOCK === '1',   // your own gate
   devices: [new LoopbackDevice(), new MyThermometer()],
 });
 ```
 
-`installSerialMock` builds a `InMemorySerialTransport` and calls `setUsbSerial`, so
-`navigator.serial` now talks to your simulated devices.
+`installInMemorySerialTransport` builds an `InMemorySerialTransport` and calls
+`setUsbSerial`, so `navigator.serial` now talks to your simulated devices.
 
 The example app ships a **Maestro** suite ([example/.maestro/](example/.maestro))
 that drives the real UI against the in-app mock (via the demo toggle):

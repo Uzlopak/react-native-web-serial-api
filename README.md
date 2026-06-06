@@ -42,6 +42,15 @@ If you want your app to be **launched automatically when a matching device is pl
 
 The bundled `@xml/device_filter` matches the common USB-serial chips (CDC-ACM, FTDI `0x0403`, CP210x `0x10C4`, CH34x `0x1A86`, PL2303 `0x067B`). Provide your own `res/xml/device_filter.xml` to override it.
 
+## Which API should I use?
+
+| Use case | Start with | Why |
+| --- | --- | --- |
+| Real hardware in your app | `Serial` / `SerialPort` | The browser-style Web Serial API you already know. |
+| Quick in-memory smoke tests | `InMemorySerialTransport` + `LoopbackDevice` | Fastest way to exercise bytes without hardware. |
+| Protocol tests against a simulated peripheral | `SimulatedDevice` + `createDeviceFixture` + `SerialClient` | Gives you both sides of the conversation in one test. |
+| App-to-app or emulator-to-host testing | `exposeSimulatedDevice` + `WebSocketSerialTransport` | Runs the same simulated device behind a real WebSocket bridge. |
+
 ## Usage
 
 ```ts
@@ -197,63 +206,58 @@ The JavaScript layer (`src/`) implements the Web Serial API on top of a thin Tur
 
 ## Testing
 
-The hardware layer sits behind a single injectable `SerialTransport` interface, so you can test against a pure-JS **virtual serial device** instead of real USB hardware — in Jest *and* live on a device/emulator/browser. The same conformance suite runs in both places, and the example app has a **Self Test** screen plus a **Virtual device (demo)** mode.
+The same transport seam lets you test without USB hardware, whether you want a
+quick loopback check, a stateful simulated peripheral, or a full WebSocket E2E
+path. The example app also includes a **Self Test** screen and a
+**Virtual device (demo)** mode.
+
+### Fast in-memory test
 
 ```ts
 import {Serial} from 'react-native-web-serial-api';
-import {InMemorySerialTransport, LoopbackDevice} from 'react-native-web-serial-api/testing';
+import {
+  InMemorySerialTransport,
+  LoopbackDevice,
+} from 'react-native-web-serial-api/testing';
 
 const transport = new InMemorySerialTransport();
-transport.addDevice(new LoopbackDevice(), {hasPermission: true});
-const serial = new Serial(transport); // no native module, no hardware
+transport.addDevice(
+  new LoopbackDevice({usbVendorId: 0x0403, usbProductId: 0x6001}),
+  {hasPermission: true},
+);
+
+const serial = new Serial(transport);
 ```
 
-### Writing a virtual serial device
-
-You author a peripheral by extending **`SimulatedDevice`** and overriding the lifecycle hooks (`onOpen`, `onData`, `onClose`); `this.send(...)` streams bytes back to the host. Registering it with `transport.addDevice()` hands you back a **`DeviceHandle`** — the handle a test or demo uses to drive it, like a human plugging in cables.
+### Host-side protocol test
 
 ```ts
-import {SimulatedDevice} from 'react-native-web-serial-api/testing';
+import {createDeviceFixture, SimulatedDevice} from 'react-native-web-serial-api/testing';
 
-// The peripheral's "firmware": greet on open, answer "ID?", stream readings.
 class Thermometer extends SimulatedDevice {
-  readonly usbVendorId = 0x10c4; // CP210x
+  readonly usbVendorId = 0x10c4;
   readonly usbProductId = 0xea60;
-  #timer?: ReturnType<typeof setInterval>;
-
   onOpen() {
     this.send('READY\r\n');
-    this.#timer = setInterval(() => this.send(`temp=${20 + Math.random() * 5}\r\n`), 1000);
   }
-  onData(bytes: Uint8Array) {
-    if (String.fromCharCode(...bytes).trim() === 'ID?') this.send('ACME-TEMP\r\n');
-  }
-  onClose() {
-    clearInterval(this.#timer);
+  emitTemperature(value: number) {
+    this.send(`temp=${value}\r\n`);
   }
 }
+
+const {client, simulatedDevice, whenOpened} =
+  await createDeviceFixture(new Thermometer());
+
+await client.open({baudRate: 115200});
+await whenOpened();
+simulatedDevice.emitTemperature(21.5);
+expect(await client.readLine()).toBe('temp=21.5');
+await client.close();
 ```
 
-`SimulatedDevice` is what *you* write (the device behaviour); `DeviceHandle` is the transport-side handle `addDevice` returns, so you can drive and inspect the device without putting any bytes on the wire:
-
-```ts
-const transport = new InMemorySerialTransport();
-const device = transport.addDevice(new Thermometer(), {hasPermission: true});
-
-device.push([0x48, 0x69]); // device emits bytes to the host, unprompted
-device.loseDevice();       // simulate an unplug (errors any open stream)
-device.attach();           // plug it back in (fires "connect" with a fresh id)
-device.written;            // frames the host has written to the device (for assertions)
-```
-
-For a fuller, **DRY** worked example see the example app's **NMEA 0183 GPS emulator** in [`example/src/devices/gps/`](example/src/devices/gps/): it streams `$GPGGA`/`$GPRMC`/… for a configurable position (default: the Greenwich Royal Observatory) and exposes an `update()` method to change position, satellites, and signal strength at runtime — no serial round-trip. It also ships a **conformance suite** ([`gps/conformance.ts`](example/src/devices/gps/conformance.ts)) of talker-agnostic NMEA 0183 checks that run against the emulator under Jest and against a real receiver (e.g. a u-blox) from the example app's **Self Test** screen.
-
-```sh
-npm test               # unit + WPT conformance suites
-npm run test:coverage  # coverage report (HTML in coverage/lcov-report)
-```
-
-See **[TESTING.md](TESTING.md)** for the full guide: authoring a `SimulatedDevice`, `SerialClient` (fluent test driver), `createDeviceFixture` (one-call fixture with `whenOpened`/`whenClosed`), fault injection, `runTestSuite` + `compareTestResults` (one suite, two runtimes), `exposeSerialDevice` (WebSocket E2E against a real app), the conformance/WPT suites, and coverage.
+For the full guide to `SerialClient`, `createDeviceFixture`, fault injection,
+`runTestSuite`, `compareTestResults`, `exposeSimulatedDevice`, and the conformance
+suites, see **[TESTING.md](TESTING.md)**.
 
 ## Remote serial over WebSocket
 
