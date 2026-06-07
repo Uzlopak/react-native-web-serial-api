@@ -32,10 +32,14 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --ignore-scripts
-      - name: Typecheck example
+      - run: npm run prepare
+      - run: npm i
         working-directory: example
+      - name: Typecheck example
         run: npx tsc --noEmit
-      - run: npm test --prefix example
+        working-directory: example
+      - run: npm test
+        working-directory: example
 
   build:
     name: Build (bob + testing subpath)
