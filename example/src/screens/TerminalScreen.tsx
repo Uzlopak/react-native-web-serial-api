@@ -192,9 +192,6 @@ export function TerminalScreen({port, settings, onBack}: Props) {
 
   const startPoll = React.useCallback(() => {
     stopPoll();
-    if (!(showCLRef.current || settingsRef.current.flowControl !== 'none')) {
-      return;
-    }
     pollRef.current = setInterval(async () => {
       if (connectedRef.current !== 'True') {
         return;
@@ -317,10 +314,6 @@ export function TerminalScreen({port, settings, onBack}: Props) {
     connectRef.current?.();
     return () => {
       flushLogOps();
-      if (flushTimerRef.current) {
-        clearTimeout(flushTimerRef.current);
-        flushTimerRef.current = null;
-      }
       teardownRef.current?.(true);
     };
   }, [flushLogOps]);

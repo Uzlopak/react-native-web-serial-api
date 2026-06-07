@@ -42,8 +42,8 @@ type DeviceRow = {
   hasPermission: boolean;
 };
 
-function hex4(n: number | undefined): string {
-  return (n ?? 0).toString(16).toUpperCase().padStart(4, '0');
+function hex4(n: number): string {
+  return n.toString(16).toUpperCase().padStart(4, '0');
 }
 
 // The Web Serial API only exposes VID/PID (not the driver/chip class), so we
@@ -157,11 +157,10 @@ export function DevicesScreen({
   const grantPermission = React.useCallback(
     async (row: DeviceRow) => {
       setError(null);
-      if (!transport) {
-        return;
-      }
       try {
-        await transport.requestPermission(row.deviceId);
+        // Only rows from the transport-backed list can be unpermitted, so this
+        // path only runs when `transport` is present.
+        await transport!.requestPermission(row.deviceId);
         refresh();
       } catch (e: any) {
         setError(e?.message ?? String(e));

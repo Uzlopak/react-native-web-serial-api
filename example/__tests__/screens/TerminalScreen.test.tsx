@@ -72,6 +72,7 @@ function createTerminalPort(options: {
   openReject?: Error;
   readerChunks?: Uint8Array[];
   readerChunksAfterReconnect?: Uint8Array[];
+  pendingReader?: boolean;
   writeReject?: Error;
   setSignalsReject?: Error;
 } = {}): TerminalPort {
@@ -84,6 +85,11 @@ function createTerminalPort(options: {
     const queue = [...chunks];
     return {
       read: jest.fn(async () => {
+        if (options.pendingReader) {
+          return await new Promise<{value: Uint8Array | undefined; done: boolean}>(
+            () => undefined,
+          );
+        }
         if (queue.length > 0) {
           return {value: queue.shift(), done: false};
         }
@@ -167,6 +173,7 @@ afterEach(() => {
 
 it('connects, sends data in hex/plaintext, updates newline, and handles control lines', async () => {
   jest.useFakeTimers({doNotFake: ['queueMicrotask']});
+  const setIntervalSpy = jest.spyOn(global, 'setInterval');
   const port = createTerminalPort({
     readerChunks: [Uint8Array.from([0x48, 0x69])],
   }) as TerminalPort & {
@@ -234,6 +241,14 @@ it('connects, sends data in hex/plaintext, updates newline, and handles control 
 
   await act(async () => {
     await port.emit('disconnect');
+  });
+  await act(async () => {
+    fireEvent(screen.getByTestId('terminal-input'), 'submitEditing');
+  });
+  await act(async () => {
+    await setIntervalSpy.mock.calls[0]?.[0]?.();
+  });
+  await act(async () => {
     await port.emit('connect');
   });
   await waitFor(() => expect(port.open).toHaveBeenCalledTimes(2));
@@ -263,7 +278,9 @@ it('reports a connection failure when open() rejects', async () => {
   });
   expect(screen.getByText(/connection failed: no serial port/)).toBeTruthy();
 
-  screen.getByTestId('terminal-send').props.onPress?.();
+  await act(async () => {
+    screen.getByTestId('terminal-send').props.onPress?.();
+  });
   fireEvent.press(screen.getByTestId('menu-controlLines'));
   fireEvent.press(screen.getByText('RTS'));
   fireEvent.press(screen.getByText('DTR'));
@@ -274,6 +291,58 @@ it('reports a connection failure when open() rejects', async () => {
   });
   expect(screen.getAllByText('not connected').length).toBeGreaterThan(0);
   expect(screen.getByText('connection failed: no serial port')).toBeTruthy();
+});
+
+it('cleans up an active reader and writer on disconnect', async () => {
+  jest.useFakeTimers({doNotFake: ['queueMicrotask']});
+  const port = createTerminalPort({
+    pendingReader: true,
+  });
+
+  render(
+    <TerminalScreen
+      port={port as any}
+      settings={{
+        baudRate: 115200,
+        dataBits: 8,
+        stopBits: 1,
+        parity: 'none',
+        flowControl: 'none',
+      }}
+      onBack={jest.fn()}
+    />,
+  );
+
+  await waitFor(() => expect(port.open).toHaveBeenCalledTimes(1));
+  await act(async () => {
+    await port.emit('disconnect');
+  });
+  expect(port.close).not.toHaveBeenCalled();
+});
+
+it('clears a pending flush timer during unmount', async () => {
+  jest.useFakeTimers({doNotFake: ['queueMicrotask']});
+  const clearTimeoutSpy = jest.spyOn(global, 'clearTimeout');
+  const port = createTerminalPort();
+
+  const {unmount} = render(
+    <TerminalScreen
+      port={port as any}
+      settings={{
+        baudRate: 115200,
+        dataBits: 8,
+        stopBits: 1,
+        parity: 'none',
+        flowControl: 'none',
+      }}
+      onBack={jest.fn()}
+    />,
+  );
+
+  await waitFor(() => expect(port.open).toHaveBeenCalledTimes(1));
+  fireEvent.press(screen.getByTestId('menu-clear'));
+  unmount();
+  expect(clearTimeoutSpy).toHaveBeenCalled();
 });
 
 it('shows the jump-to-bottom affordance and can clear the log', async () => {
@@ -302,6 +371,16 @@ it('shows the jump-to-bottom affordance and can clear the log', async () => {
   });
 
   expect(screen.getByText('48 69 0D 0A')).toBeTruthy();
+  await act(async () => {
+    screen.getByTestId('terminal-log').props.onContentSizeChange?.();
+  });
+  fireEvent.scroll(screen.getByTestId('terminal-log'), {
+    nativeEvent: {
+      contentOffset: {x: 0, y: 980},
+      contentSize: {width: 100, height: 1000},
+      layoutMeasurement: {width: 100, height: 100},
+    },
+  });
   fireEvent.scroll(screen.getByTestId('terminal-log'), {
     nativeEvent: {
       contentOffset: {x: 0, y: 0},

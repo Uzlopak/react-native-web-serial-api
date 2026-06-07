@@ -309,6 +309,19 @@ describe('WMBusGateway — low-level edges', () => {
     expect(evt.msg).toBe(WMBus.RxMessageInd);
   });
 
+  it('emits a scan-mode indication when scan mode is active', async () => {
+    const mounted = await mount();
+    host = mounted.host;
+    const {gateway} = mounted;
+
+    await host.request(Sap.WMBus, WMBus.SetScanModeReq, [0x01, 0x1e, 0x00]);
+    gateway.injectRxPacket([
+      0x0f, 0x44, 0x34, 0x12, 0xbc, 0x9a, 0x78, 0x56, 0x01, 0x07, 0x7a,
+    ]);
+    const evt = await host.recv();
+    expect(evt.msg).toBe(WMBus.ScanModeInd);
+  });
+
   it('passes through an unknown link mode in packet info', async () => {
     const mounted = await mount();
     host = mounted.host;
@@ -382,6 +395,45 @@ describe('WMBusGateway — low-level edges', () => {
     await expect(
       host.expectNoMessage(Sap.WMBus, WMBus.RxMessageInd, 800),
     ).resolves.toBeUndefined();
+  });
+
+  it('starts and stops auto-streaming meters when the radio state changes', async () => {
+    const mounted = await mount();
+    host = mounted.host;
+    const {gateway} = mounted;
+    const meter = new WMBusMeter({
+      address: {
+        manufacturerId: 0x1234,
+        deviceId: 0x56789abc,
+        version: 0x01,
+        type: 0x07,
+      },
+      intervalMs: 50,
+      startImmediately: true,
+    });
+    const startSpy = jest.spyOn(meter, 'startPeriodic');
+    const stopSpy = jest.spyOn(meter, 'stopPeriodic');
+
+    gateway.addMeter(meter);
+    expect(stopSpy).toHaveBeenCalled();
+
+    await host.request(Sap.WMBus, WMBus.SetActiveConfigReq, [
+      0x02,
+      0x0e, 0x00,
+      0x00, 0x00,
+      0x32, 0x00,
+      0x88, 0x13, 0x00, 0x00,
+    ]);
+    expect(startSpy).toHaveBeenCalled();
+
+    await host.request(Sap.WMBus, WMBus.SetActiveConfigReq, [
+      0x00,
+      0x0e, 0x00,
+      0x00, 0x00,
+      0x32, 0x00,
+      0x88, 0x13, 0x00, 0x00,
+    ]);
+    expect(stopSpy).toHaveBeenCalledTimes(3);
   });
 
   it('ignores unknown SAP and message ids without breaking the session', async () => {
@@ -553,6 +605,23 @@ describe('WMBusGateway — WM-Bus Gateway SAP', () => {
     r.u32le(); // txPkt
     r.u32le(); // txError
     expect(r.remaining).toBe(4); // reserved info
+  });
+
+  it('sets the time-synced bit after SetDateTime', async () => {
+    const epoch = 0x5f649e19;
+    await host.request(Sap.DevMgmt, DevMgmt.SetDateTimeReq, [
+      epoch & 0xff,
+      (epoch >>> 8) & 0xff,
+      (epoch >>> 16) & 0xff,
+      (epoch >>> 24) & 0xff,
+    ]);
+    const {payload} = await host.request(Sap.WMBus, WMBus.GetStatusReportReq);
+    const r = new ByteReader(payload);
+    r.u8();
+    r.u32le();
+    r.u32le();
+    r.u8();
+    expect(r.u16le() & (1 << 0)).toBeTruthy();
   });
 
   it('accepts Send WM-Bus Message and emits a Tx notification', async () => {

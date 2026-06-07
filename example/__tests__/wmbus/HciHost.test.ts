@@ -45,7 +45,7 @@ describe('HciHost', () => {
       DevMgmt.PingReq,
       [],
       DevMgmt.PingRsp,
-      200,
+      undefined,
       m => skipped.push(m),
     );
 
@@ -59,12 +59,53 @@ describe('HciHost', () => {
     ]);
   });
 
+  it('skips undecodable frames before returning the next recv message', async () => {
+    const client = makeClient([
+      Uint8Array.from(slipEncode([0x7f, 0x00, 0x01, 0x02])),
+      Uint8Array.from(
+        slipEncode(encodeHci(Sap.DevMgmt, DevMgmt.PingRsp, [0x00])),
+      ),
+    ]);
+    const host = new HciHost(client as any);
+
+    await expect(host.recv()).resolves.toEqual({
+      sap: Sap.DevMgmt,
+      msg: DevMgmt.PingRsp,
+      payload: [0x00],
+    });
+  });
+
   it('rejects recv when the underlying stream has already ended', async () => {
     const client = makeClient();
     client.ended = true;
     const host = new HciHost(client as any);
 
     await expect(host.recv()).rejects.toThrow('serial stream closed');
+  });
+
+  it('returns the first matching pending message in waitFor', async () => {
+    const client = makeClient([
+      Uint8Array.from(slipEncode(encodeHci(Sap.WMBus, WMBus.RxMessageInd, [1]))),
+      Uint8Array.from(slipEncode(encodeHci(Sap.DevMgmt, DevMgmt.PingRsp, [0x00]))),
+    ]);
+    const host = new HciHost(client as any);
+    const msg = await host.waitFor(Sap.DevMgmt, DevMgmt.PingRsp);
+
+    expect(msg).toEqual({
+      sap: Sap.DevMgmt,
+      msg: DevMgmt.PingRsp,
+      payload: [0x00],
+    });
+  });
+
+  it('rejects waitFor when the underlying stream has ended', async () => {
+    const client = makeClient();
+    client.ended = true;
+    const host = new HciHost(client as any);
+
+    await expect(
+      host.waitFor(Sap.DevMgmt, DevMgmt.PingRsp, 100),
+    ).rejects.toThrow('serial stream closed');
   });
 
   it('times out when a response never arrives', async () => {
@@ -74,11 +115,64 @@ describe('HciHost', () => {
     ).rejects.toThrow('timed out waiting for response');
   });
 
+  it('rejects exchange when the stream has already ended', async () => {
+    const client = makeClient();
+    client.ended = true;
+    const host = new HciHost(client as any);
+
+    await expect(
+      host.exchange(Sap.DevMgmt, DevMgmt.PingReq, [], DevMgmt.PingRsp, 100),
+    ).rejects.toThrow('serial stream closed');
+  });
+
   it('times out when a waited-for message never arrives', async () => {
     const host = new HciHost(makeClient() as any);
     await expect(
       host.waitFor(Sap.WMBus, WMBus.RxMessageInd, 0),
     ).rejects.toThrow('timed out waiting for message');
+  });
+
+  it('skips undecodable frames while waiting for a matching response', async () => {
+    const client = makeClient([
+      Uint8Array.from(slipEncode([0x7f, 0x00, 0x01, 0x02])),
+      Uint8Array.from(
+        slipEncode(encodeHci(Sap.DevMgmt, DevMgmt.PingRsp, [0x00])),
+      ),
+    ]);
+    const host = new HciHost(client as any);
+
+    await expect(
+      host.exchange(Sap.DevMgmt, DevMgmt.PingReq, [], DevMgmt.PingRsp),
+    ).resolves.toEqual({
+      sap: Sap.DevMgmt,
+      msg: DevMgmt.PingRsp,
+      payload: [0x00],
+    });
+  });
+
+  it('ignores pending messages that do not satisfy the waitFor predicate', async () => {
+    const client = makeClient([
+      Uint8Array.from(
+        slipEncode(encodeHci(Sap.WMBus, WMBus.RxMessageInd, [0x01])),
+      ),
+      Uint8Array.from(
+        slipEncode(encodeHci(Sap.WMBus, WMBus.RxMessageInd, [0x02])),
+      ),
+    ]);
+    const host = new HciHost(client as any);
+
+    await expect(
+      host.waitFor(
+        Sap.WMBus,
+        WMBus.RxMessageInd,
+        undefined,
+        m => m.payload[0] === 0x02,
+      ),
+    ).resolves.toEqual({
+      sap: Sap.WMBus,
+      msg: WMBus.RxMessageInd,
+      payload: [0x02],
+    });
   });
 
   it('treats a quiet timeout as non-fatal in expectNoMessage', async () => {
@@ -88,12 +182,12 @@ describe('HciHost', () => {
     const nowSpy = jest.spyOn(Date, 'now');
     let now = 0;
     nowSpy.mockImplementation(() => {
-      now += 100;
+      now += 1000;
       return now;
     });
 
     await expect(
-      host.expectNoMessage(Sap.WMBus, WMBus.RxMessageInd, 1200),
+      host.expectNoMessage(Sap.WMBus, WMBus.RxMessageInd),
     ).resolves.toBeUndefined();
   });
 
@@ -108,5 +202,26 @@ describe('HciHost', () => {
     await expect(
       host.expectNoMessage(Sap.WMBus, WMBus.RxMessageInd, 1200),
     ).rejects.toThrow('unexpected message 0x9/0x20 received');
+  });
+
+  it('ignores pending messages that do not match the expectNoMessage predicate', async () => {
+    const client = makeClient([
+      Uint8Array.from(
+        slipEncode(encodeHci(Sap.WMBus, WMBus.RxMessageInd, [0x01])),
+      ),
+      Uint8Array.from(
+        slipEncode(encodeHci(Sap.DevMgmt, DevMgmt.PingRsp, [0x00])),
+      ),
+    ]);
+    const host = new HciHost(client as any);
+
+    await expect(
+      host.expectNoMessage(
+        Sap.WMBus,
+        WMBus.RxMessageInd,
+        undefined,
+        m => m.payload[0] === 0x02,
+      ),
+    ).resolves.toBeUndefined();
   });
 });
