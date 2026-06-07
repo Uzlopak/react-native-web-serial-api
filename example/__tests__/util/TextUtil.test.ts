@@ -40,9 +40,7 @@ describe('TextUtil', () => {
   it('encodes and decodes strings', () => {
     const bytes = TextUtil.stringToBytes('Hi!');
     expect(Array.from(bytes)).toEqual([72, 105, 33]);
-    expect(TextUtil.bytesToString(Uint8Array.from([72, 105, 33]))).toBe(
-      'Hi!',
-    );
+    expect(TextUtil.bytesToString(Uint8Array.from([72, 105, 33]))).toBe('Hi!');
   });
 
   it('falls back when text encoders are unavailable', () => {
@@ -62,18 +60,12 @@ describe('TextUtil', () => {
         fallback = require('../../src/util/TextUtil') as typeof TextUtil;
       });
 
-      expect(
-        fallback?.bytesToString(Uint8Array.from([0x48, 0xe9])),
-      ).toBe('Hé');
+      expect(fallback?.bytesToString(Uint8Array.from([0x48, 0xe9]))).toBe('Hé');
       expect(Array.from(fallback?.stringToBytes('Hé') ?? [])).toEqual([
-        0x48,
-        0xc3,
-        0xa9,
+        0x48, 0xc3, 0xa9,
       ]);
       expect(Array.from(fallback?.stringToBytes('€') ?? [])).toEqual([
-        0xe2,
-        0x82,
-        0xac,
+        0xe2, 0x82, 0xac,
       ]);
     } finally {
       globalAny.TextDecoder = originalDecoder;

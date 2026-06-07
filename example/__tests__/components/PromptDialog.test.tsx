@@ -4,7 +4,6 @@
 
 import {expect, it, jest} from '@jest/globals';
 import {fireEvent, render, screen} from '@testing-library/react-native';
-import React from 'react';
 import {PromptDialog} from '../../src/components/PromptDialog';
 
 it('submits the trimmed value and closes the dialog', () => {
@@ -43,7 +42,10 @@ it('resets to the initial value when the dialog is reopened', () => {
     />,
   );
 
-  fireEvent.changeText(screen.getByDisplayValue('ws://first.example'), 'edited');
+  fireEvent.changeText(
+    screen.getByDisplayValue('ws://first.example'),
+    'edited',
+  );
 
   rerender(
     <PromptDialog

@@ -3,8 +3,12 @@
  */
 
 import {afterEach, expect, it, jest} from '@jest/globals';
-import {fireEvent, render, screen, waitFor} from '@testing-library/react-native';
-import React from 'react';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react-native';
 
 const mockDisconnectSpy = jest.fn();
 const mockDemoTransport = {kind: 'demo-transport', disconnect: jest.fn()};
@@ -40,7 +44,7 @@ jest.mock('../src/virtual', () => ({
 }));
 
 jest.mock('../src/screens/DevicesScreen', () => {
-  const React = require('react');
+  const _React = require('react');
   const {Pressable, Text, View} = require('react-native');
   return {
     DevicesScreen: ({
@@ -75,7 +79,9 @@ jest.mock('../src/screens/DevicesScreen', () => {
           onPress={() => onSetRemote('ws://bridge.local:8080')}>
           <Text>remote on</Text>
         </Pressable>
-        <Pressable testID="devices-remote-off" onPress={() => onSetRemote(null)}>
+        <Pressable
+          testID="devices-remote-off"
+          onPress={() => onSetRemote(null)}>
           <Text>remote off</Text>
         </Pressable>
       </View>
@@ -84,7 +90,7 @@ jest.mock('../src/screens/DevicesScreen', () => {
 });
 
 jest.mock('../src/screens/ConnectScreen', () => {
-  const React = require('react');
+  const _React = require('react');
   const {Pressable, Text, View} = require('react-native');
   return {
     ConnectScreen: ({initial, onBack, onConnect}: any) => (
@@ -112,7 +118,7 @@ jest.mock('../src/screens/ConnectScreen', () => {
 });
 
 jest.mock('../src/screens/TerminalScreen', () => {
-  const React = require('react');
+  const _React = require('react');
   const {Pressable, Text, View} = require('react-native');
   return {
     TerminalScreen: ({settings, onBack}: any) => (
@@ -127,7 +133,7 @@ jest.mock('../src/screens/TerminalScreen', () => {
 });
 
 jest.mock('../src/screens/SelfTestScreen', () => {
-  const React = require('react');
+  const _React = require('react');
   const {Pressable, Text, View} = require('react-native');
   return {
     SelfTestScreen: ({serial, onBack}: any) => (
@@ -141,12 +147,8 @@ jest.mock('../src/screens/SelfTestScreen', () => {
   };
 });
 
-const {UsbSerial, Serial, serial} = jest.requireMock(
-  'react-native-web-serial-api',
-) as {
+const {UsbSerial} = jest.requireMock('react-native-web-serial-api') as {
   UsbSerial: {getUsbSerial: jest.Mock};
-  Serial: jest.Mock;
-  serial: {kind: string; getPorts: jest.Mock};
 };
 
 const {WebSocketSerialTransport} = jest.requireMock(

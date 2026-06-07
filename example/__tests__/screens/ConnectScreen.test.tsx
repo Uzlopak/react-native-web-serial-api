@@ -3,21 +3,19 @@
  */
 
 import {expect, it, jest} from '@jest/globals';
-import {fireEvent, render, screen, waitFor} from '@testing-library/react-native';
-import React from 'react';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react-native';
 import {ConnectScreen} from '../../src/screens/ConnectScreen';
 
 jest.mock('../../src/components/SingleChoiceDialog', () => {
-  const React = require('react');
+  const _React = require('react');
   const {Pressable, Text, View} = require('react-native');
   return {
-    SingleChoiceDialog: ({
-      visible,
-      title,
-      options,
-      onSelect,
-      onClose,
-    }: any) =>
+    SingleChoiceDialog: ({visible, title, options, onSelect, onClose}: any) =>
       visible ? (
         <View testID={`dialog-${title}`}>
           <Text>{title}</Text>
@@ -85,9 +83,7 @@ it('covers all setting dialogs and the default initial state', async () => {
   const onBack = jest.fn();
   const onConnect = jest.fn();
 
-  render(
-    <ConnectScreen port={port} onBack={onBack} onConnect={onConnect} />,
-  );
+  render(<ConnectScreen port={port} onBack={onBack} onConnect={onConnect} />);
 
   expect(screen.getByText('115200')).toBeTruthy();
   expect(screen.getByText('8')).toBeTruthy();

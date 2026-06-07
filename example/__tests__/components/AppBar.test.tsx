@@ -4,7 +4,6 @@
 
 import {expect, it, jest} from '@jest/globals';
 import {fireEvent, render, screen} from '@testing-library/react-native';
-import React from 'react';
 import {AppBar} from '../../src/components/AppBar';
 
 it('renders the title and back button', () => {

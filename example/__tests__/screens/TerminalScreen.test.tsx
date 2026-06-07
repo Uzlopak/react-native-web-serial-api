@@ -3,12 +3,17 @@
  */
 
 import {afterEach, expect, it, jest} from '@jest/globals';
-import {fireEvent, render, screen, waitFor, act} from '@testing-library/react-native';
-import React from 'react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react-native';
 import {TerminalScreen} from '../../src/screens/TerminalScreen';
 
 jest.mock('../../src/components/AppBar', () => {
-  const React = require('react');
+  const _React = require('react');
   const {Pressable, Text, View} = require('react-native');
   return {
     AppBar: ({title, onBack, menu}: any) => (
@@ -33,7 +38,7 @@ jest.mock('../../src/components/AppBar', () => {
 });
 
 jest.mock('../../src/components/SingleChoiceDialog', () => {
-  const React = require('react');
+  const _React = require('react');
   const {Pressable, Text, View} = require('react-native');
   return {
     SingleChoiceDialog: ({visible, title, options, onSelect, onClose}: any) =>
@@ -59,7 +64,14 @@ jest.mock('../../src/components/SingleChoiceDialog', () => {
 type TerminalPort = {
   open: jest.Mock;
   close: jest.Mock;
-  getSignals: jest.Mock;
+  getSignals: jest.MockedFunction<
+    () => Promise<{
+      clearToSend: boolean;
+      dataSetReady: boolean;
+      dataCarrierDetect: boolean;
+      ringIndicator: boolean;
+    }>
+  >;
   setSignals: jest.Mock;
   readable: {getReader: jest.Mock};
   writable: {getWriter: jest.Mock};
@@ -68,14 +80,18 @@ type TerminalPort = {
   emit: (event: 'connect' | 'disconnect') => Promise<void>;
 };
 
-function createTerminalPort(options: {
-  openReject?: Error;
-  readerChunks?: Uint8Array[];
-  readerChunksAfterReconnect?: Uint8Array[];
-  pendingReader?: boolean;
-  writeReject?: Error;
-  setSignalsReject?: Error;
-} = {}): TerminalPort {
+function createTerminalPort(
+  options: {
+    openReject?: Error;
+    readerChunks?: Uint8Array[];
+    readerChunksAfterReconnect?: Uint8Array[];
+    pendingReader?: boolean;
+    readerCancelReject?: Error | string;
+    writerCloseReject?: Error | string;
+    writeReject?: Error;
+    setSignalsReject?: Error;
+  } = {},
+): TerminalPort {
   const listeners: Record<'connect' | 'disconnect', Set<() => unknown>> = {
     connect: new Set(),
     disconnect: new Set(),
@@ -83,21 +99,28 @@ function createTerminalPort(options: {
   const writes: number[][] = [];
   const makeReader = (chunks: Uint8Array[]) => {
     const queue = [...chunks];
-    return {
+    const reader: any = {
       read: jest.fn(async () => {
         if (options.pendingReader) {
-          return await new Promise<{value: Uint8Array | undefined; done: boolean}>(
-            () => undefined,
-          );
+          return await new Promise<{
+            value: Uint8Array | undefined;
+            done: boolean;
+          }>(() => undefined);
         }
         if (queue.length > 0) {
           return {value: queue.shift(), done: false};
         }
         return {value: undefined, done: true};
       }),
-      cancel: jest.fn(async () => undefined),
       releaseLock: jest.fn(),
     };
+    reader.cancel = jest.fn(async () => {
+      if (options.readerCancelReject) {
+        throw options.readerCancelReject;
+      }
+      return undefined;
+    });
+    return reader;
   };
   const makeWriter = () => ({
     write: jest.fn(async (chunk: Uint8Array) => {
@@ -106,7 +129,12 @@ function createTerminalPort(options: {
       }
       writes.push(Array.from(chunk));
     }),
-    close: jest.fn(async () => undefined),
+    close: jest.fn(async () => {
+      if (options.writerCloseReject) {
+        throw options.writerCloseReject;
+      }
+      return undefined;
+    }),
     releaseLock: jest.fn(),
   });
 
@@ -119,8 +147,8 @@ function createTerminalPort(options: {
       readerFactoryCount += 1;
       return makeReader(
         first
-          ? options.readerChunks ?? []
-          : options.readerChunksAfterReconnect ?? [],
+          ? (options.readerChunks ?? [])
+          : (options.readerChunksAfterReconnect ?? []),
       );
     }),
     getWriter: jest.fn(() => {
@@ -150,12 +178,16 @@ function createTerminalPort(options: {
     }),
     readable: {getReader: last.getReader},
     writable: {getWriter: last.getWriter},
-    addEventListener: jest.fn((event: 'connect' | 'disconnect', cb: () => unknown) => {
-      listeners[event].add(cb);
-    }),
-    removeEventListener: jest.fn((event: 'connect' | 'disconnect', cb: () => unknown) => {
-      listeners[event].delete(cb);
-    }),
+    addEventListener: jest.fn(
+      (event: 'connect' | 'disconnect', cb: () => unknown) => {
+        listeners[event].add(cb);
+      },
+    ),
+    removeEventListener: jest.fn(
+      (event: 'connect' | 'disconnect', cb: () => unknown) => {
+        listeners[event].delete(cb);
+      },
+    ),
     emit: async (event: 'connect' | 'disconnect') => {
       for (const cb of listeners[event]) {
         await cb();
@@ -232,7 +264,9 @@ it('connects, sends data in hex/plaintext, updates newline, and handles control 
   await act(async () => {
     jest.advanceTimersByTime(100);
   });
-  await waitFor(() => expect(port.setSignals).toHaveBeenCalledWith({break: false}));
+  await waitFor(() =>
+    expect(port.setSignals).toHaveBeenCalledWith({break: false}),
+  );
 
   await act(async () => {
     await port.emit('connect');
@@ -293,10 +327,64 @@ it('reports a connection failure when open() rejects', async () => {
   expect(screen.getByText('connection failed: no serial port')).toBeTruthy();
 });
 
+it('reports a connection failure string when open() rejects', async () => {
+  jest.useFakeTimers({doNotFake: ['queueMicrotask']});
+  const port = createTerminalPort({openReject: 'no serial port' as any});
+
+  render(
+    <TerminalScreen
+      port={port as any}
+      settings={{
+        baudRate: 9600,
+        dataBits: 8,
+        stopBits: 1,
+        parity: 'none',
+        flowControl: 'none',
+      }}
+      onBack={jest.fn()}
+    />,
+  );
+
+  await waitFor(() => expect(port.open).toHaveBeenCalledTimes(1));
+  await act(async () => {
+    jest.advanceTimersByTime(60);
+  });
+  expect(screen.getByText(/connection failed: no serial port/)).toBeTruthy();
+});
+
 it('cleans up an active reader and writer on disconnect', async () => {
   jest.useFakeTimers({doNotFake: ['queueMicrotask']});
   const port = createTerminalPort({
     pendingReader: true,
+  });
+
+  render(
+    <TerminalScreen
+      port={port as any}
+      settings={{
+        baudRate: 115200,
+        dataBits: 8,
+        stopBits: 1,
+        parity: 'none',
+        flowControl: 'none',
+      }}
+      onBack={jest.fn()}
+    />,
+  );
+
+  await waitFor(() => expect(port.open).toHaveBeenCalledTimes(1));
+  await act(async () => {
+    await port.emit('disconnect');
+  });
+  expect(port.close).not.toHaveBeenCalled();
+});
+
+it('ignores reader and writer cleanup rejections on disconnect', async () => {
+  jest.useFakeTimers({doNotFake: ['queueMicrotask']});
+  const port = createTerminalPort({
+    pendingReader: true,
+    readerCancelReject: new Error('cancel boom'),
+    writerCloseReject: new Error('close boom'),
   });
 
   render(
@@ -426,8 +514,22 @@ it('disables sending when hardware flow control reports CTS low', async () => {
   });
   await waitFor(() => expect(screen.getByText('⊘')).toBeTruthy());
   await waitFor(() =>
-    expect(screen.getByTestId('terminal-send').props.accessibilityState.disabled).toBe(true),
+    expect(
+      screen.getByTestId('terminal-send').props.accessibilityState.disabled,
+    ).toBe(true),
   );
+
+  (port.getSignals as any).mockResolvedValueOnce({
+    clearToSend: true,
+    dataSetReady: true,
+    dataCarrierDetect: false,
+    ringIndicator: false,
+  });
+  await act(async () => {
+    jest.advanceTimersByTime(200);
+    await Promise.resolve();
+  });
+  await waitFor(() => expect(screen.getByText('➤')).toBeTruthy());
 });
 
 it('keeps plain text receive mode on LF and ignores empty chunks', async () => {
@@ -512,7 +614,9 @@ it('renders plain text input, receives CRLF chunks, and surfaces write/control f
   });
   fireEvent.changeText(screen.getByTestId('terminal-input'), 'plain');
   fireEvent.press(screen.getByTestId('terminal-send'));
-  await waitFor(() => expect(screen.getByText(/write failed: write boom/)).toBeTruthy());
+  await waitFor(() =>
+    expect(screen.getByText(/write failed: write boom/)).toBeTruthy(),
+  );
 
   await waitFor(() => expect(screen.getByText('Hi')).toBeTruthy());
   await waitFor(() => expect(screen.getByText('World')).toBeTruthy());
@@ -522,7 +626,64 @@ it('renders plain text input, receives CRLF chunks, and surfaces write/control f
   fireEvent.press(screen.getByText('DTR'));
   fireEvent.press(screen.getByTestId('menu-sendBreak'));
 
-  await waitFor(() => expect(screen.getByText(/setRTS failed: signals boom/)).toBeTruthy());
+  await waitFor(() =>
+    expect(screen.getByText(/setRTS failed: signals boom/)).toBeTruthy(),
+  );
+  expect(screen.getByText(/setDTR failed: signals boom/)).toBeTruthy();
+  expect(screen.getByText(/send BREAK failed: signals boom/)).toBeTruthy();
+});
+
+it('renders caret spans and string-based write/control failures', async () => {
+  jest.useFakeTimers({doNotFake: ['queueMicrotask']});
+  const port = createTerminalPort({
+    readerChunks: [],
+    readerChunksAfterReconnect: [Uint8Array.from([0x01])],
+    writeReject: 'write boom' as any,
+    setSignalsReject: 'signals boom' as any,
+  });
+
+  render(
+    <TerminalScreen
+      port={port as any}
+      settings={{
+        baudRate: 115200,
+        dataBits: 8,
+        stopBits: 1,
+        parity: 'none',
+        flowControl: 'none',
+      }}
+      onBack={jest.fn()}
+    />,
+  );
+
+  await waitFor(() => expect(port.open).toHaveBeenCalledTimes(1));
+  await act(async () => {
+    jest.advanceTimersByTime(60);
+  });
+
+  fireEvent.press(screen.getByTestId('menu-hex'));
+  await act(async () => {
+    await port.emit('disconnect');
+    await port.emit('connect');
+    jest.advanceTimersByTime(60);
+  });
+
+  await waitFor(() => expect(screen.getByText('^A')).toBeTruthy());
+
+  fireEvent.changeText(screen.getByTestId('terminal-input'), 'plain');
+  fireEvent.press(screen.getByTestId('terminal-send'));
+  await waitFor(() =>
+    expect(screen.getByText(/write failed: write boom/)).toBeTruthy(),
+  );
+
+  fireEvent.press(screen.getByTestId('menu-controlLines'));
+  fireEvent.press(screen.getByText('RTS'));
+  fireEvent.press(screen.getByText('DTR'));
+  fireEvent.press(screen.getByTestId('menu-sendBreak'));
+
+  await waitFor(() =>
+    expect(screen.getByText(/setRTS failed: signals boom/)).toBeTruthy(),
+  );
   expect(screen.getByText(/setDTR failed: signals boom/)).toBeTruthy();
   expect(screen.getByText(/send BREAK failed: signals boom/)).toBeTruthy();
 });

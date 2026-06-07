@@ -3,12 +3,19 @@
  */
 
 import {afterEach, expect, it, jest} from '@jest/globals';
-import {act, fireEvent, render, screen, waitFor} from '@testing-library/react-native';
-import React from 'react';
-import {DevicesScreen, chipLabel} from '../../src/screens/DevicesScreen';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react-native';
+import {chipLabel, DevicesScreen} from '../../src/screens/DevicesScreen';
+
+let promptDialogProps: any;
 
 jest.mock('../../src/components/AppBar', () => {
-  const React = require('react');
+  const _React = require('react');
   const {Pressable, Text, View} = require('react-native');
   return {
     AppBar: ({title, onBack, menu}: any) => (
@@ -33,11 +40,12 @@ jest.mock('../../src/components/AppBar', () => {
 });
 
 jest.mock('../../src/components/PromptDialog', () => {
-  const React = require('react');
+  const _React = require('react');
   const {Pressable, Text, View} = require('react-native');
   return {
-    PromptDialog: ({visible, title, onSubmit, onClose}: any) =>
-      visible ? (
+    PromptDialog: ({visible, title, onSubmit, onClose}: any) => {
+      promptDialogProps = {visible, title, onSubmit, onClose};
+      return visible ? (
         <View testID={`prompt-${title}`}>
           <Text>{title}</Text>
           <Pressable
@@ -49,7 +57,8 @@ jest.mock('../../src/components/PromptDialog', () => {
             <Text>submit</Text>
           </Pressable>
         </View>
-      ) : null,
+      ) : null;
+    },
   };
 });
 
@@ -137,7 +146,9 @@ it('loads the device list, opens permitted ports, grants permission, and drives 
   expect(serial.getPorts).toHaveBeenCalled();
 
   fireEvent.press(screen.getByText(/CP210x/));
-  await waitFor(() => expect(transport.requestPermission).toHaveBeenCalledWith(2));
+  await waitFor(() =>
+    expect(transport.requestPermission).toHaveBeenCalledWith(2),
+  );
   expect(transport.findAllDrivers).toHaveBeenCalledTimes(2);
 
   fireEvent.press(screen.getByTestId('menu-demo'));
@@ -154,6 +165,39 @@ it('loads the device list, opens permitted ports, grants permission, and drives 
   fireEvent.press(screen.getByTestId('menu-request'));
   await waitFor(() => expect(serial.requestPort).toHaveBeenCalledTimes(1));
   await waitFor(() => expect(onSelect).toHaveBeenCalledWith(requestedPort));
+});
+
+it('ignores a blank remote prompt submission', async () => {
+  const serial = createSerialStub();
+  serial.getPorts.mockResolvedValue([]);
+  const transport = createTransportStub([]);
+  const onSetRemote = jest.fn();
+
+  render(
+    <DevicesScreen
+      serial={serial}
+      transport={transport}
+      demoMode={false}
+      onToggleDemo={jest.fn()}
+      onOpenSelfTest={jest.fn()}
+      onSelect={jest.fn()}
+      remoteUrl={null}
+      onSetRemote={onSetRemote}
+    />,
+  );
+
+  await waitFor(() =>
+    expect(transport.findAllDrivers).toHaveBeenCalledTimes(1),
+  );
+  await act(async () => {
+    await transport.findAllDrivers.mock.results[0]?.value;
+  });
+
+  fireEvent.press(screen.getByTestId('menu-remote'));
+  await act(async () => {
+    promptDialogProps.onSubmit('');
+  });
+  expect(onSetRemote).not.toHaveBeenCalled();
 });
 
 it('shows the remote banner, polls for changes, and can turn remote mode off', async () => {
@@ -178,8 +222,12 @@ it('shows the remote banner, polls for changes, and can turn remote mode off', a
     />,
   );
 
-  expect(screen.getByText('Virtual device mode — no hardware required')).toBeTruthy();
-  expect(screen.getByText('Remote serial — ws://bridge.local:8080')).toBeTruthy();
+  expect(
+    screen.getByText('Virtual device mode — no hardware required'),
+  ).toBeTruthy();
+  expect(
+    screen.getByText('Remote serial — ws://bridge.local:8080'),
+  ).toBeTruthy();
   expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 1500);
 
   fireEvent.press(screen.getByTestId('menu-remote'));
@@ -232,9 +280,13 @@ it('surfaces transport enumeration errors', async () => {
     />,
   );
 
-  await waitFor(() => expect(transport.findAllDrivers).toHaveBeenCalledTimes(1));
+  await waitFor(() =>
+    expect(transport.findAllDrivers).toHaveBeenCalledTimes(1),
+  );
   await act(async () => {
-    await transport.findAllDrivers.mock.results[0]?.value.catch(() => undefined);
+    await transport.findAllDrivers.mock.results[0]?.value.catch(
+      () => undefined,
+    );
   });
   await waitFor(() => expect(screen.getByText('transport boom')).toBeTruthy());
 });
@@ -289,7 +341,49 @@ it('surfaces an error when opening a permitted device fails', async () => {
     />,
   );
 
-  await waitFor(() => expect(transport.findAllDrivers).toHaveBeenCalledTimes(1));
+  await waitFor(() =>
+    expect(transport.findAllDrivers).toHaveBeenCalledTimes(1),
+  );
+  await act(async () => {
+    await transport.findAllDrivers.mock.results[0]?.value;
+  });
+  await waitFor(() => expect(screen.getByTestId('device-1')).toBeTruthy());
+  await act(async () => {
+    fireEvent.press(screen.getByTestId('device-1'));
+    await Promise.resolve();
+  });
+  await waitFor(() => expect(screen.getByText('open boom')).toBeTruthy());
+});
+
+it('surfaces a string error when opening a permitted device fails', async () => {
+  const serial = createSerialStub();
+  serial.getPorts.mockRejectedValue('open boom');
+  const transport = createTransportStub([
+    {
+      deviceId: 1,
+      portNumber: 0,
+      usbVendorId: 0x0403,
+      usbProductId: 0x6001,
+      hasPermission: true,
+    },
+  ]);
+
+  render(
+    <DevicesScreen
+      serial={serial}
+      transport={transport}
+      demoMode={false}
+      onToggleDemo={jest.fn()}
+      onOpenSelfTest={jest.fn()}
+      onSelect={jest.fn()}
+      remoteUrl={null}
+      onSetRemote={jest.fn()}
+    />,
+  );
+
+  await waitFor(() =>
+    expect(transport.findAllDrivers).toHaveBeenCalledTimes(1),
+  );
   await act(async () => {
     await transport.findAllDrivers.mock.results[0]?.value;
   });
@@ -302,7 +396,9 @@ it('surfaces an error when opening a permitted device fails', async () => {
 });
 
 it('falls back to the first available port when the VID/PID match is missing', async () => {
-  const fallbackPort = {getInfo: () => ({usbVendorId: 0x2222, usbProductId: 0x3333})};
+  const fallbackPort = {
+    getInfo: () => ({usbVendorId: 0x2222, usbProductId: 0x3333}),
+  };
   const serial = createSerialStub();
   serial.getPorts.mockResolvedValue([fallbackPort]);
   const transport = createTransportStub([
@@ -329,7 +425,9 @@ it('falls back to the first available port when the VID/PID match is missing', a
     />,
   );
 
-  await waitFor(() => expect(transport.findAllDrivers).toHaveBeenCalledTimes(1));
+  await waitFor(() =>
+    expect(transport.findAllDrivers).toHaveBeenCalledTimes(1),
+  );
   await act(async () => {
     await transport.findAllDrivers.mock.results[0]?.value;
   });
@@ -374,7 +472,9 @@ it('surfaces device-open and permission-grant failures', async () => {
     />,
   );
 
-  await waitFor(() => expect(transport.findAllDrivers).toHaveBeenCalledTimes(1));
+  await waitFor(() =>
+    expect(transport.findAllDrivers).toHaveBeenCalledTimes(1),
+  );
   await act(async () => {
     await transport.findAllDrivers.mock.results[0]?.value;
   });
@@ -383,11 +483,54 @@ it('surfaces device-open and permission-grant failures', async () => {
     fireEvent.press(screen.getByTestId('device-1'));
     await Promise.resolve();
   });
-  await waitFor(() => expect(screen.getByText('Device is no longer available.')).toBeTruthy());
+  await waitFor(() =>
+    expect(screen.getByText('Device is no longer available.')).toBeTruthy(),
+  );
 
   await waitFor(() => expect(screen.getByTestId('device-2')).toBeTruthy());
   await act(async () => {
     fireEvent.press(screen.getByTestId('device-2'));
+    await Promise.resolve();
+  });
+  await waitFor(() => expect(screen.getByText('permission boom')).toBeTruthy());
+});
+
+it('surfaces a string error when permission grant fails', async () => {
+  const serial = createSerialStub();
+  serial.getPorts.mockResolvedValue([]);
+  const transport = createTransportStub([
+    {
+      deviceId: 1,
+      portNumber: 0,
+      usbVendorId: 0x0403,
+      usbProductId: 0x6001,
+      hasPermission: false,
+    },
+  ]);
+  transport.requestPermission.mockRejectedValue('permission boom');
+
+  render(
+    <DevicesScreen
+      serial={serial}
+      transport={transport}
+      demoMode={false}
+      onToggleDemo={jest.fn()}
+      onOpenSelfTest={jest.fn()}
+      onSelect={jest.fn()}
+      remoteUrl={null}
+      onSetRemote={jest.fn()}
+    />,
+  );
+
+  await waitFor(() =>
+    expect(transport.findAllDrivers).toHaveBeenCalledTimes(1),
+  );
+  await act(async () => {
+    await transport.findAllDrivers.mock.results[0]?.value;
+  });
+  await waitFor(() => expect(screen.getByTestId('device-1')).toBeTruthy());
+  await act(async () => {
+    fireEvent.press(screen.getByTestId('device-1'));
     await Promise.resolve();
   });
   await waitFor(() => expect(screen.getByText('permission boom')).toBeTruthy());
@@ -457,6 +600,10 @@ it('surfaces a request-port error and refreshes on app foreground', async () => 
     appStateListener?.('active');
   });
   await waitFor(() => expect(serial.getPorts).toHaveBeenCalledTimes(2));
+  await act(async () => {
+    appStateListener?.('background');
+  });
+  expect(serial.getPorts).toHaveBeenCalledTimes(2);
 });
 
 it('maps known USB vendor ids to chip labels', () => {

@@ -3,13 +3,17 @@
  */
 
 import {expect, it, jest} from '@jest/globals';
-import {fireEvent, render, screen, waitFor} from '@testing-library/react-native';
-import React from 'react';
-import {SelfTestScreen} from '../../src/screens/SelfTestScreen';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react-native';
 import type {
   ConformanceProgress,
   ConformanceResult,
 } from '../../../src/__tests__/conformance-suite';
+import {SelfTestScreen} from '../../src/screens/SelfTestScreen';
 
 jest.mock('../../../src/__tests__/conformance-suite', () => ({
   runSerialConformance: jest.fn(),
@@ -28,7 +32,9 @@ jest.mock('../../src/devices/wmbus/conformance', () => ({
   runWMBusConformance: jest.fn(),
 }));
 
-const conformance = jest.requireMock('../../../src/__tests__/conformance-suite') as {
+const conformance = jest.requireMock(
+  '../../../src/__tests__/conformance-suite',
+) as {
   runSerialConformance: jest.MockedFunction<
     (progress?: ConformanceProgress) => Promise<ConformanceResult[]>
   >;
@@ -61,7 +67,9 @@ it('shows progress and results for a passing virtual suite', async () => {
 
   fireEvent.press(screen.getByText('Run conformance suite'));
   await waitFor(() =>
-    expect(screen.getByText('Conformance suite (virtual) — 1/1 passed')).toBeTruthy(),
+    expect(
+      screen.getByText('Conformance suite (virtual) — 1/1 passed'),
+    ).toBeTruthy(),
   );
   expect(screen.getByText('loopback echoes bytes')).toBeTruthy();
   expect(screen.getByText('✓')).toBeTruthy();
@@ -87,7 +95,9 @@ it('shows a running label without a total when the suite has not reported one', 
   );
   resolveRun?.();
   await waitFor(() =>
-    expect(screen.getByText('Conformance suite (virtual) — 0/0 passed')).toBeTruthy(),
+    expect(
+      screen.getByText('Conformance suite (virtual) — 0/0 passed'),
+    ).toBeTruthy(),
   );
 });
 
@@ -100,7 +110,9 @@ it('renders a failure when the connected-device smoke test throws', async () => 
 
   fireEvent.press(screen.getByText('Run on connected device'));
   await waitFor(() =>
-    expect(screen.getByText('Connected device smoke test — 0/1 passed')).toBeTruthy(),
+    expect(
+      screen.getByText('Connected device smoke test — 0/1 passed'),
+    ).toBeTruthy(),
   );
   expect(screen.getByText(/device unavailable/)).toBeTruthy();
   expect(screen.getByText('✗')).toBeTruthy();
@@ -108,7 +120,9 @@ it('renders a failure when the connected-device smoke test throws', async () => 
 
 it('runs the WM-Bus and GPS virtual and compare suites', async () => {
   gps.makeVirtualGpsPort.mockResolvedValueOnce(fakePort);
-  gps.runGpsConformance.mockResolvedValue([{name: 'gps ok', passed: true, durationMs: 1}]);
+  gps.runGpsConformance.mockResolvedValue([
+    {name: 'gps ok', passed: true, durationMs: 1},
+  ]);
   gps.compareGpsWithSimulator.mockResolvedValue([
     {name: 'gps compare', passed: true, durationMs: 1},
   ]);
@@ -136,19 +150,25 @@ it('runs the WM-Bus and GPS virtual and compare suites', async () => {
 
   fireEvent.press(screen.getByTestId('wmbus-compare'));
   await waitFor(() =>
-    expect(screen.getByText('WM-Bus device vs simulator — 1/1 passed')).toBeTruthy(),
+    expect(
+      screen.getByText('WM-Bus device vs simulator — 1/1 passed'),
+    ).toBeTruthy(),
   );
   expect(screen.getByText('wmbus compare')).toBeTruthy();
 
   fireEvent.press(screen.getByTestId('gps-virtual'));
   await waitFor(() =>
-    expect(screen.getByText('GPS NMEA suite (virtual) — 1/1 passed')).toBeTruthy(),
+    expect(
+      screen.getByText('GPS NMEA suite (virtual) — 1/1 passed'),
+    ).toBeTruthy(),
   );
   expect(screen.getByText('gps ok')).toBeTruthy();
 
   fireEvent.press(screen.getByTestId('gps-compare'));
   await waitFor(() =>
-    expect(screen.getByText('GPS receiver vs simulator — 1/1 passed')).toBeTruthy(),
+    expect(
+      screen.getByText('GPS receiver vs simulator — 1/1 passed'),
+    ).toBeTruthy(),
   );
   expect(screen.getByText('gps compare')).toBeTruthy();
 });
@@ -170,7 +190,9 @@ it('shows compare errors when no WM-Bus or GPS device is connected', async () =>
 
   fireEvent.press(screen.getByTestId('gps-compare'));
   await waitFor(() =>
-    expect(screen.getByText('GPS receiver vs simulator — 0/1 passed')).toBeTruthy(),
+    expect(
+      screen.getByText('GPS receiver vs simulator — 0/1 passed'),
+    ).toBeTruthy(),
   );
   expect(screen.getByText(/Connect an NMEA 0183 GPS receiver/)).toBeTruthy();
 });

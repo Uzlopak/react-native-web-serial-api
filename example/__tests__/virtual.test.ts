@@ -17,9 +17,9 @@ describe('createDemoTransport', () => {
 
     expect(drivers).toHaveLength(4);
     expect(ports).toHaveLength(3);
-    expect(drivers.some(p => p.usbVendorId === 0x10c4 && !p.hasPermission)).toBe(
-      true,
-    );
+    expect(
+      drivers.some(p => p.usbVendorId === 0x10c4 && !p.hasPermission),
+    ).toBe(true);
     expect(ports.map(p => p.getInfo())).toEqual(
       expect.arrayContaining([
         {usbVendorId: 0x0403, usbProductId: 0x6001},
@@ -41,7 +41,7 @@ describe('createDemoTransport', () => {
     const reader = port.readable!.getReader();
     const writer = port.writable!.getWriter();
     await writer.write(Uint8Array.from([0x61, 0x62, 0x63]));
-    expect(Array.from((await readBytes(reader, 3)))).toEqual([0x61, 0x62, 0x63]);
+    expect(Array.from(await readBytes(reader, 3))).toEqual([0x61, 0x62, 0x63]);
     reader.releaseLock();
     writer.releaseLock();
     await port.close();

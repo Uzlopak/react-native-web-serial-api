@@ -3,13 +3,13 @@
  */
 
 import {describe, expect, it} from '@jest/globals';
+import {ByteReader, ByteWriter} from '../../src/devices/wmbus/bytes';
 import {
   addressFromPacket,
   buildWMBusPacket,
   readAddress,
   writeAddress,
 } from '../../src/devices/wmbus/frame';
-import {ByteReader, ByteWriter} from '../../src/devices/wmbus/bytes';
 
 const ADDRESS = {
   manufacturerId: 0x1234,

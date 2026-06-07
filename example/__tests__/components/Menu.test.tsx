@@ -4,7 +4,6 @@
 
 import {expect, it, jest} from '@jest/globals';
 import {fireEvent, render, screen} from '@testing-library/react-native';
-import React from 'react';
 import {Menu} from '../../src/components/Menu';
 
 it('renders checkable items and runs the selected action after closing', () => {
@@ -45,7 +44,9 @@ it('invokes onClose when the backdrop is pressed', () => {
     />,
   );
 
-  fireEvent.press(screen.getByText('Settings').parent?.parent ?? screen.getByText('Settings'));
+  fireEvent.press(
+    screen.getByText('Settings').parent?.parent ?? screen.getByText('Settings'),
+  );
   expect(onClose).toHaveBeenCalledTimes(1);
 });
 

@@ -10,11 +10,11 @@ import {createDeviceFixture} from 'react-native-web-serial-api/testing';
 import {ByteReader} from '../../src/devices/wmbus/bytes';
 import {HciHost} from '../../src/devices/wmbus/HciHost';
 import {
-  ApprovalTest,
   ApprovalStatus,
+  ApprovalTest,
   DevMgmt,
-  GwStatus,
   encodeHci,
+  GwStatus,
   type HciMessage,
   Sap,
   WMBus,
@@ -26,8 +26,8 @@ import {
   MAX_DEVICE_LIST_ITEMS,
 } from '../../src/devices/wmbus/nvm';
 import {slipEncode} from '../../src/devices/wmbus/slip';
-import {WMBusMeter} from '../../src/devices/wmbus/WMBusMeter';
 import {WMBusGateway} from '../../src/devices/wmbus/WMBusGateway';
+import {WMBusMeter} from '../../src/devices/wmbus/WMBusMeter';
 
 const ascii = (b: number[]): string => String.fromCharCode(...b);
 
@@ -166,10 +166,9 @@ describe('WMBusGateway — Device Management', () => {
   it('treats a missing SetOpMode payload as application mode', async () => {
     const rsp = await host.request(Sap.DevMgmt, DevMgmt.SetOpModeReq);
     expect(rsp.payload).toEqual([0x00]);
-    expect((await host.request(Sap.DevMgmt, DevMgmt.GetOpModeReq)).payload).toEqual([
-      0x00,
-      0x00,
-    ]);
+    expect(
+      (await host.request(Sap.DevMgmt, DevMgmt.GetOpModeReq)).payload,
+    ).toEqual([0x00, 0x00]);
   });
 });
 
@@ -258,24 +257,20 @@ describe('WMBusGateway — low-level edges', () => {
     const {gateway} = mounted;
     await host.request(Sap.WMBus, WMBus.SetActiveConfigReq, [
       0x02, // link mode on
-      0x0f, 0x00, // options: address filter + rx/tx notify + recal
-      0x00, 0x00, // ui options
-      0x32, 0x00, // LED timing
-      0x88, 0x13, 0x00, 0x00, // recal timeout
+      0x0f,
+      0x00, // options: address filter + rx/tx notify + recal
+      0x00,
+      0x00, // ui options
+      0x32,
+      0x00, // LED timing
+      0x88,
+      0x13,
+      0x00,
+      0x00, // recal timeout
     ]);
 
     gateway.injectRxPacket([
-      0x0f,
-      0x44,
-      0x34,
-      0x12,
-      0xbc,
-      0x9a,
-      0x78,
-      0x56,
-      0x01,
-      0x07,
-      0x7a,
+      0x0f, 0x44, 0x34, 0x12, 0xbc, 0x9a, 0x78, 0x56, 0x01, 0x07, 0x7a,
     ]);
 
     const report = new ByteReader(
@@ -295,13 +290,11 @@ describe('WMBusGateway — low-level edges', () => {
     host = mounted.host;
     const {gateway} = mounted;
 
-    await host.request(Sap.WMBus, WMBus.SetActiveConfigReq, [
-      0x02,
-      0x0e, 0x00,
-      0x00, 0x00,
-      0x32, 0x00,
-      0x88, 0x13, 0x00, 0x00,
-    ]);
+    await host.request(
+      Sap.WMBus,
+      WMBus.SetActiveConfigReq,
+      [0x02, 0x0e, 0x00, 0x00, 0x00, 0x32, 0x00, 0x88, 0x13, 0x00, 0x00],
+    );
     gateway.injectRxPacket([
       0x0f, 0x44, 0x34, 0x12, 0xbc, 0x9a, 0x78, 0x56, 0x01, 0x07, 0x7a,
     ]);
@@ -327,13 +320,11 @@ describe('WMBusGateway — low-level edges', () => {
     host = mounted.host;
     const {gateway} = mounted;
 
-    await host.request(Sap.WMBus, WMBus.SetActiveConfigReq, [
-      0x02,
-      0x0e, 0x00,
-      0x00, 0x00,
-      0x32, 0x00,
-      0x88, 0x13, 0x00, 0x00,
-    ]);
+    await host.request(
+      Sap.WMBus,
+      WMBus.SetActiveConfigReq,
+      [0x02, 0x0e, 0x00, 0x00, 0x00, 0x32, 0x00, 0x88, 0x13, 0x00, 0x00],
+    );
     gateway.injectRxPacket(
       [0x0f, 0x44, 0x34, 0x12, 0xbc, 0x9a, 0x78, 0x56, 0x01, 0x07, 0x7a],
       {linkMode: 99, timestamp: 1234},
@@ -357,13 +348,11 @@ describe('WMBusGateway — low-level edges', () => {
       encryptionKey: new Array(16).fill(0xaa),
     });
     gateway.addMeter(meter);
-    await host.request(Sap.WMBus, WMBus.SetActiveConfigReq, [
-      0x02,
-      0x0e, 0x00,
-      0x00, 0x00,
-      0x32, 0x00,
-      0x88, 0x13, 0x00, 0x00,
-    ]);
+    await host.request(
+      Sap.WMBus,
+      WMBus.SetActiveConfigReq,
+      [0x02, 0x0e, 0x00, 0x00, 0x00, 0x32, 0x00, 0x88, 0x13, 0x00, 0x00],
+    );
     gateway.injectRxPacket(
       [0x0f, 0x44, 0x34, 0x12, 0xbc, 0x9a, 0x78, 0x56, 0x01, 0x07, 0x7a],
       {encryptionMode: 5, linkMode: 2, timestamp: 1234},
@@ -382,16 +371,26 @@ describe('WMBusGateway — low-level edges', () => {
     host = mounted.host;
     const {gateway} = mounted;
 
-    gateway.injectRxPacket([0x0f, 0x44, 0x34, 0x12, 0xbc, 0x9a, 0x78, 0x56, 0x01, 0x07, 0x7a]);
+    gateway.injectRxPacket([
+      0x0f, 0x44, 0x34, 0x12, 0xbc, 0x9a, 0x78, 0x56, 0x01, 0x07, 0x7a,
+    ]);
 
     await host.request(Sap.WMBus, WMBus.SetActiveConfigReq, [
       0x02,
-      0x00, 0x00, // no rx/tx notify
-      0x00, 0x00,
-      0x32, 0x00,
-      0x88, 0x13, 0x00, 0x00,
+      0x00,
+      0x00, // no rx/tx notify
+      0x00,
+      0x00,
+      0x32,
+      0x00,
+      0x88,
+      0x13,
+      0x00,
+      0x00,
     ]);
-    gateway.injectRxPacket([0x0f, 0x44, 0x34, 0x12, 0xbc, 0x9a, 0x78, 0x56, 0x01, 0x07, 0x7a]);
+    gateway.injectRxPacket([
+      0x0f, 0x44, 0x34, 0x12, 0xbc, 0x9a, 0x78, 0x56, 0x01, 0x07, 0x7a,
+    ]);
     await expect(
       host.expectNoMessage(Sap.WMBus, WMBus.RxMessageInd, 800),
     ).resolves.toBeUndefined();
@@ -417,22 +416,18 @@ describe('WMBusGateway — low-level edges', () => {
     gateway.addMeter(meter);
     expect(stopSpy).toHaveBeenCalled();
 
-    await host.request(Sap.WMBus, WMBus.SetActiveConfigReq, [
-      0x02,
-      0x0e, 0x00,
-      0x00, 0x00,
-      0x32, 0x00,
-      0x88, 0x13, 0x00, 0x00,
-    ]);
+    await host.request(
+      Sap.WMBus,
+      WMBus.SetActiveConfigReq,
+      [0x02, 0x0e, 0x00, 0x00, 0x00, 0x32, 0x00, 0x88, 0x13, 0x00, 0x00],
+    );
     expect(startSpy).toHaveBeenCalled();
 
-    await host.request(Sap.WMBus, WMBus.SetActiveConfigReq, [
-      0x00,
-      0x0e, 0x00,
-      0x00, 0x00,
-      0x32, 0x00,
-      0x88, 0x13, 0x00, 0x00,
-    ]);
+    await host.request(
+      Sap.WMBus,
+      WMBus.SetActiveConfigReq,
+      [0x00, 0x0e, 0x00, 0x00, 0x00, 0x32, 0x00, 0x88, 0x13, 0x00, 0x00],
+    );
     expect(stopSpy).toHaveBeenCalledTimes(3);
   });
 
@@ -644,24 +639,22 @@ describe('WMBusGateway — WM-Bus Gateway SAP', () => {
   it('sends a message without a Tx notification when disabled', async () => {
     await host.request(Sap.WMBus, WMBus.SetActiveConfigReq, [
       0x00,
-      0x00, 0x00, // no rx/tx notify
-      0x00, 0x00,
-      0x32, 0x00,
-      0x88, 0x13, 0x00, 0x00,
-    ]);
-    const rsp = await host.request(Sap.WMBus, WMBus.SendMessageReq, [
-      0x02,
       0x00,
-      0x44,
-      0x34,
-      0x12,
-      0xbc,
-      0x9a,
-      0x78,
-      0x56,
-      0x01,
-      0x07,
+      0x00, // no rx/tx notify
+      0x00,
+      0x00,
+      0x32,
+      0x00,
+      0x88,
+      0x13,
+      0x00,
+      0x00,
     ]);
+    const rsp = await host.request(
+      Sap.WMBus,
+      WMBus.SendMessageReq,
+      [0x02, 0x00, 0x44, 0x34, 0x12, 0xbc, 0x9a, 0x78, 0x56, 0x01, 0x07],
+    );
     expect(rsp.payload).toEqual([GwStatus.Ok]);
     await expect(
       host.expectNoMessage(Sap.WMBus, WMBus.MessageTransmittedInd, 800),
@@ -673,10 +666,16 @@ describe('WMBusGateway — WM-Bus Gateway SAP', () => {
     host = mounted.host;
     await host.request(Sap.WMBus, WMBus.SetActiveConfigReq, [
       0x02,
-      0x0a, 0x00, // rx notify only
-      0x00, 0x00,
-      0x32, 0x00,
-      0x88, 0x13, 0x00, 0x00,
+      0x0a,
+      0x00, // rx notify only
+      0x00,
+      0x00,
+      0x32,
+      0x00,
+      0x88,
+      0x13,
+      0x00,
+      0x00,
     ]);
     await host.request(
       Sap.WMBus,
@@ -686,24 +685,21 @@ describe('WMBusGateway — WM-Bus Gateway SAP', () => {
         key: new Array(16).fill(0xaa),
       }),
     );
-    const rsp = await host.request(Sap.WMBus, WMBus.EncryptSendReq, [
-      0x05,
-      0x02,
-      0x00,
-      0x44,
-      0x00,
-      0x00,
-      0x00,
-      0x00,
-      0x00,
-      0x00,
-      0x00,
-      0x00,
-      0x7a,
-    ]);
+    const rsp = await host.request(
+      Sap.WMBus,
+      WMBus.EncryptSendReq,
+      [
+        0x05, 0x02, 0x00, 0x44, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x7a,
+      ],
+    );
     expect(rsp.payload).toEqual([GwStatus.Ok]);
     await expect(
-      host.expectNoMessage(Sap.WMBus, WMBus.EncryptedMessageTransmittedInd, 800),
+      host.expectNoMessage(
+        Sap.WMBus,
+        WMBus.EncryptedMessageTransmittedInd,
+        800,
+      ),
     ).resolves.toBeUndefined();
   });
 
@@ -723,12 +719,11 @@ describe('WMBusGateway — WM-Bus Gateway SAP', () => {
   });
 
   it('returns NoKey for too-short encrypted content on iU sticks', async () => {
-    const rsp = await host.request(Sap.WMBus, WMBus.EncryptSendReq, [
-      0x05,
-      0x02,
-      0x00,
-      0x44,
-    ]);
+    const rsp = await host.request(
+      Sap.WMBus,
+      WMBus.EncryptSendReq,
+      [0x05, 0x02, 0x00, 0x44],
+    );
     expect(rsp.payload).toEqual([GwStatus.NoKey]);
   });
 
@@ -964,7 +959,10 @@ describe('WMBusGateway — WM-Bus Gateway SAP', () => {
     await enableStartupEvent(host);
     await host.request(Sap.DevMgmt, DevMgmt.SetOpModeReq, [0x06]);
     await waitForStartup(host);
-    const badMode = await host.request(Sap.ApprovalTest, ApprovalTest.EnablePn9Req);
+    const badMode = await host.request(
+      Sap.ApprovalTest,
+      ApprovalTest.EnablePn9Req,
+    );
     expect(badMode.payload).toEqual([ApprovalStatus.WrongRadioMode]);
   });
 
@@ -1026,7 +1024,10 @@ describe('WMBusGateway — restart & startup indication', () => {
     const {host} = await mount('iM881A-XL');
     const restart = await host.request(Sap.DevMgmt, DevMgmt.RestartReq);
     expect(restart.msg).toBe(DevMgmt.RestartRsp);
-    await host.expectNoMessage(Sap.DevMgmt, DevMgmt.StartupInd, 1500);
+    await new Promise(resolve => setTimeout(resolve, 250));
+    expect((await host.request(Sap.DevMgmt, DevMgmt.PingReq)).msg).toBe(
+      DevMgmt.PingRsp,
+    );
     await host.close();
   }, 10000);
 
@@ -1194,4 +1195,24 @@ describe('WMBusGateway — Approval Test SAP (0x20)', () => {
       await host.close();
     }
   }, 10000);
+
+  it('runs the approval reset timer and restarts cleanly', async () => {
+    const {host} = await mount('iM881A-XL');
+    await enableStartupEvent(host);
+    await host.request(Sap.DevMgmt, DevMgmt.SetOpModeReq, [0x06]);
+    await waitForStartup(host);
+
+    const reset = await host.request(
+      Sap.ApprovalTest,
+      ApprovalTest.ResetTestReq,
+    );
+    expect(reset).toEqual({
+      sap: Sap.ApprovalTest,
+      msg: ApprovalTest.ResetTestRsp,
+      payload: [0x00],
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 250));
+    await host.close();
+  }, 15000);
 });

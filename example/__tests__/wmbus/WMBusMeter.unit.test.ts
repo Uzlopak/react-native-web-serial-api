@@ -3,7 +3,10 @@
  */
 
 import {afterEach, describe, expect, it, jest} from '@jest/globals';
-import {WMBusMeter, ENCRYPTION_MODE_5} from '../../src/devices/wmbus/WMBusMeter';
+import {
+  ENCRYPTION_MODE_5,
+  WMBusMeter,
+} from '../../src/devices/wmbus/WMBusMeter';
 
 const ADDRESS = {
   manufacturerId: 0x1234,

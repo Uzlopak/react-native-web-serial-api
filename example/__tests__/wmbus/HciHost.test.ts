@@ -3,8 +3,8 @@
  */
 
 import {afterEach, describe, expect, it, jest} from '@jest/globals';
-import {DevMgmt, encodeHci, Sap, WMBus} from '../../src/devices/wmbus/hci';
 import {HciHost} from '../../src/devices/wmbus/HciHost';
+import {DevMgmt, encodeHci, Sap, WMBus} from '../../src/devices/wmbus/hci';
 import {slipEncode} from '../../src/devices/wmbus/slip';
 
 function makeClient(chunks: Uint8Array[] = []) {
@@ -32,7 +32,9 @@ describe('HciHost', () => {
 
   it('skips unsolicited messages before the matching response', async () => {
     const client = makeClient([
-      Uint8Array.from(slipEncode(encodeHci(Sap.WMBus, WMBus.RxMessageInd, [1]))),
+      Uint8Array.from(
+        slipEncode(encodeHci(Sap.WMBus, WMBus.RxMessageInd, [1])),
+      ),
       Uint8Array.from(
         slipEncode(encodeHci(Sap.DevMgmt, DevMgmt.PingRsp, [0x00])),
       ),
@@ -85,8 +87,12 @@ describe('HciHost', () => {
 
   it('returns the first matching pending message in waitFor', async () => {
     const client = makeClient([
-      Uint8Array.from(slipEncode(encodeHci(Sap.WMBus, WMBus.RxMessageInd, [1]))),
-      Uint8Array.from(slipEncode(encodeHci(Sap.DevMgmt, DevMgmt.PingRsp, [0x00]))),
+      Uint8Array.from(
+        slipEncode(encodeHci(Sap.WMBus, WMBus.RxMessageInd, [1])),
+      ),
+      Uint8Array.from(
+        slipEncode(encodeHci(Sap.DevMgmt, DevMgmt.PingRsp, [0x00])),
+      ),
     ]);
     const host = new HciHost(client as any);
     const msg = await host.waitFor(Sap.DevMgmt, DevMgmt.PingRsp);
