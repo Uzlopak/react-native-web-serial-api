@@ -1,6 +1,6 @@
 {
   "name": "react-native-web-serial-api",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "W3C Web Serial API (navigator.serial) for React Native on Android, backed by a USB-serial TurboModule (built on mik3y/usb-serial-for-android).",
   "main": "lib/commonjs/index.js",
   "react-native": "lib/commonjs/index.js",
