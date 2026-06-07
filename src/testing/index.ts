@@ -14,7 +14,7 @@
  */
 
 export type {SerialTransport} from '../transport';
-// The injection seam, re-exported here for convenience so a test or the
+// The transport override, re-exported here for convenience so a test or the
 // example's demo mode can flip the global transport from one import.
 export {getUsbSerial, resetUsbSerial, setUsbSerial} from '../UsbSerial';
 // One-call fixture: mount a device sim + drive both sides + await connect.

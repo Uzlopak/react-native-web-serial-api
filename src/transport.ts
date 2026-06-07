@@ -1,5 +1,5 @@
 /**
- * Hardware-transport seam for the Web Serial polyfill.
+ * Hardware-transport abstraction for the Web Serial polyfill.
  *
  * `SerialTransport` is the single interface that the `Serial`/`SerialPort`
  * classes depend on to talk to "the device". The production implementation

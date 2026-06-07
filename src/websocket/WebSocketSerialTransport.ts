@@ -2,7 +2,7 @@
  * A {@link SerialTransport} that talks to a remote serial port over a WebSocket
  * bridge (run `expose-serial-websocket` on the host — see `bin/expose-serial.js`).
  *
- * Because it implements the same seam as the native `UsbSerialModule` and the
+ * Because it implements the same transport contract as the native `UsbSerialModule` and the
  * in-memory `InMemorySerialTransport`, it's a drop-in: the whole `Serial` /
  * `SerialPort` polyfill (streams, signals, reconnect, the conformance suite)
  * works on top of it unchanged.

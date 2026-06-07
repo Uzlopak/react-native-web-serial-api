@@ -1,7 +1,7 @@
 /**
  * Jest config for the library's own unit + conformance tests (src/__tests__).
  *
- * Uses the React Native preset because the transport seam (src/UsbSerial.ts)
+ * Uses the React Native preset because the transport layer (src/UsbSerial.ts)
  * imports `react-native`. The tests themselves never touch real native modules
  * — they inject a InMemorySerialTransport — but the import graph still needs the
  * RN mocks the preset provides.

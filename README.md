@@ -1,18 +1,26 @@
 # react-native-web-serial-api
 
-> The [W3C Web Serial API](https://wicg.github.io/serial/) (`navigator.serial`) for **React Native on Android**, backed by a USB-serial TurboModule built on top of [`mik3y/usb-serial-for-android`](https://github.com/mik3y/usb-serial-for-android).
+> The [W3C Web Serial API](https://wicg.github.io/serial/) (`navigator.serial`) for React Native on Android, backed by a USB-serial TurboModule built on top of [`mik3y/usb-serial-for-android`](https://github.com/mik3y/usb-serial-for-android).
 
-Talk to USB serial devices (FTDI, CP210x, CH340/CH341, PL2303, CDC-ACM …) from React Native using the **exact same API you already know from the browser** — `serial.requestPort()`, `port.open()`, `port.readable`, `port.writable`, and so on.
+Use the same API you already know from the browser - `serial.requestPort()`, `port.open()`, `port.readable`, `port.writable`, `getPorts()`, `setSignals()`, and `getSignals()` - in a React Native app that talks to USB serial devices.
 
-- Spec-compliant `Serial` / `SerialPort` implementation (`getPorts`, `requestPort`, `open`, `close`, `readable`, `writable`, `setSignals`, `getSignals`, `forget`, `connect`/`disconnect` events)
-- New Architecture **TurboModule**
-- Native port-picker dialog + USB permission handling
-- Backed by Web Streams (`ReadableStream` / `WritableStream`)
-- Drop-in for code written against the browser Web Serial API (on web it transparently uses the native `navigator.serial`)
+## At a glance
 
-> **Platform support:** Android only. On web (`react-native-web`) the package delegates to the browser's native Web Serial API. There is no iOS implementation (iOS does not allow generic USB-serial access), so iOS autolinking is disabled.
+- Spec-style `Serial` / `SerialPort` implementation
+- New Architecture TurboModule
+- Native port picker and Android USB permission handling
+- Web Streams under the hood (`ReadableStream` / `WritableStream`)
+- Works with browser-style code on web by delegating to the native `navigator.serial`
 
-## Installation
+## Platform support
+
+| Platform | Support | Notes |
+| --- | --- | --- |
+| Android | Yes | Native USB-serial support through the TurboModule. |
+| Web | Yes | Delegates to the browser's native `navigator.serial`. |
+| iOS | No | Generic USB-serial access is not available, so autolinking is disabled. |
+
+## Quick start
 
 ```sh
 npm install react-native-web-serial-api
@@ -20,27 +28,60 @@ npm install react-native-web-serial-api
 yarn add react-native-web-serial-api
 ```
 
-This is a New Architecture library, so make sure your app has the New Architecture enabled (default in recent React Native). No manual linking is required — the module is autolinked.
+This is a New Architecture library. Make sure your app has the New Architecture enabled. No manual linking is required - the module is autolinked.
 
-### Android setup
+### Minimal usage
 
-The library ships its own `AndroidManifest.xml` that declares the port-picker activity, the detach receiver, and the `android.hardware.usb.host` feature, so usually **no extra configuration is needed**.
+```ts
+import {serial} from 'react-native-web-serial-api';
 
-If you want your app to be **launched automatically when a matching device is plugged in**, add an intent filter to your launcher activity in `android/app/src/main/AndroidManifest.xml`:
+async function run() {
+  // Must be called from a user gesture on web.
+  const port = await serial.requestPort({
+    filters: [{usbVendorId: 0x0403}], // optional, for example FTDI only
+  });
+
+  await port.open({baudRate: 115200, dataBits: 8, stopBits: 1, parity: 'none'});
+
+  const writer = port.writable.getWriter();
+  await writer.write(new TextEncoder().encode('Hello\n'));
+  writer.releaseLock();
+
+  const reader = port.readable.getReader();
+  const {value} = await reader.read();
+  console.log(value);
+  reader.releaseLock();
+
+  await port.close();
+}
+```
+
+## Android setup
+
+The library ships its own `AndroidManifest.xml` that declares the port picker activity, the detach receiver, and the `android.hardware.usb.host` feature, so usually no extra configuration is needed.
+
+If you want your app to launch automatically when a matching device is plugged in, add an intent filter to your launcher activity in `android/app/src/main/AndroidManifest.xml`:
 
 ```xml
 <activity android:name=".MainActivity" ...>
   <intent-filter>
     <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
   </intent-filter>
-  <!-- The device_filter resource is provided by the library -->
   <meta-data
     android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
     android:resource="@xml/device_filter" />
 </activity>
 ```
 
-The bundled `@xml/device_filter` matches the common USB-serial chips (CDC-ACM, FTDI `0x0403`, CP210x `0x10C4`, CH34x `0x1A86`, PL2303 `0x067B`). Provide your own `res/xml/device_filter.xml` to override it.
+The bundled `@xml/device_filter` matches common USB-serial chips:
+
+- CDC-ACM
+- FTDI `0x0403`
+- CP210x `0x10C4`
+- CH34x `0x1A86`
+- PL2303 `0x067B`
+
+Provide your own `res/xml/device_filter.xml` to override it.
 
 ## Which API should I use?
 
@@ -51,46 +92,33 @@ The bundled `@xml/device_filter` matches the common USB-serial chips (CDC-ACM, F
 | Protocol tests against a simulated peripheral | `SimulatedDevice` + `createDeviceFixture` + `SerialClient` | Gives you both sides of the conversation in one test. |
 | App-to-app or emulator-to-host testing | `exposeSimulatedDevice` + `WebSocketSerialTransport` | Runs the same simulated device behind a real WebSocket bridge. |
 
-## Usage
+## Core concepts
+
+### `serial`
+
+The package exports a ready-to-use `serial` singleton, which is the equivalent of `navigator.serial`.
 
 ```ts
 import {serial} from 'react-native-web-serial-api';
 
-async function run() {
-  // Shows a native dialog to pick a port, then requests USB permission.
-  const port = await serial.requestPort({
-    filters: [{usbVendorId: 0x0403}], // optional — e.g. only FTDI devices
-  });
-
-  await port.open({baudRate: 115200, dataBits: 8, stopBits: 1, parity: 'none'});
-
-  // Write
-  const writer = port.writable.getWriter();
-  await writer.write(new TextEncoder().encode('Hello\n'));
-  writer.releaseLock();
-
-  // Read
-  const reader = port.readable.getReader();
-  const {value} = await reader.read(); // value is a Uint8Array
-  console.log(value);
-  reader.releaseLock();
-
-  await port.close();
-}
+const ports = await serial.getPorts();
 ```
 
-In Android USB mode, `allowedBluetoothServiceClassIds` is not supported by
-`requestPort()` and will throw a `TypeError` if provided.
+### Permissions
 
-### Control & status signals
+There are two different permission concepts:
+
+- `serial.requestPort()` is the Web Serial permission flow. In Android mode it shows the native picker and requests Android USB permission for the selected device.
+- Android USB permission can also be granted outside the app, for example through the system attach dialog or an `USB_DEVICE_ATTACHED` intent filter.
+
+On Android, `serial.getPorts()` returns the devices the app can currently access through Android USB permission, regardless of how that permission was obtained. On web, `getPorts()` returns ports previously granted by the site in the browser's persistent permission store.
 
 ```ts
-await port.setSignals({dataTerminalReady: true, requestToSend: false});
-const {clearToSend, dataCarrierDetect, ringIndicator, dataSetReady} =
-  await port.getSignals();
+const ports = await serial.getPorts();
+const port = await serial.requestPort();
 ```
 
-### Connect / disconnect events
+### Connect and disconnect events
 
 ```ts
 serial.addEventListener('connect', () => console.log('device attached'));
@@ -99,117 +127,76 @@ serial.addEventListener('disconnect', () => console.log('device detached'));
 port.addEventListener('disconnect', () => console.log('this port went away'));
 ```
 
-On Android, `serial` fires `connect` when a USB device is **attached** _and_ when
-the app is **granted USB permission** for a device (the latter matters because
-Android revokes permission on unplug, so a re-attached device only becomes
-accessible — and shows up in `getPorts()` — once permission is re-granted).
-Simply subscribing with `serial.addEventListener('connect', …)` is enough to
-receive these; you don't need to call `getPorts()` first. A common pattern is to
-re-run `getPorts()` on every `connect`/`disconnect` to keep a device list fresh.
+On Android, `serial` fires `connect` when a USB device is attached and when the app is granted USB permission for a device. A common pattern is to re-run `getPorts()` on every `connect` / `disconnect` so your device list stays fresh.
 
-### Listing already-permitted ports
+### Control and status signals
 
 ```ts
-const ports = await serial.getPorts();
+await port.setSignals({dataTerminalReady: true, requestToSend: false});
+const {clearToSend, dataCarrierDetect, ringIndicator, dataSetReady} =
+  await port.getSignals();
 ```
 
-## Permission model (Android vs. Web Serial)
+### Browser-only option note
 
-There are two distinct notions of "permission" in play, and they behave
-differently on Android than in the browser:
+In Android USB mode, `allowedBluetoothServiceClassIds` is not supported by `requestPort()` and will throw a `TypeError` if provided.
 
-- **Web Serial permission grant** — `serial.requestPort()`. In the browser this
-  records a site-level grant for the chosen port; on Android it shows a native
-  picker and requests the Android USB permission for the selected device. This
-  is the mechanism for gaining access to a device you don't have access to yet,
-  and it is **unchanged** by anything below.
-- **Native Android USB permission** — `UsbManager` permission for a device.
-  This can be granted **outside** the app entirely: when you plug a device in,
-  Android may show its own _"Open <app> to handle this USB device? / use by
-  default for this device"_ dialog, or the app may have been launched via a
-  `USB_DEVICE_ATTACHED` intent filter. In those cases the app already holds USB
-  permission without ever calling `requestPort()`.
-
-**`serial.getPorts()` in Android/native mode** returns **every probed
-USB-serial port the app can currently access through Android USB permission** —
-regardless of how that permission was obtained. So a device granted via the
-system attach dialog appears in `getPorts()` even though `requestPort()` was
-never called for it. Probed devices the app does **not** yet have permission for
-are excluded; use `requestPort()` to gain access to those.
-
-```ts
-// All devices accessible right now (natively-granted OR previously requested):
-const ports = await serial.getPorts();
-
-// Gain access to a device you don't have permission for yet:
-const port = await serial.requestPort();
-```
-
-On the **web**, `getPorts()` returns the ports the user has previously granted
-the site via `requestPort()` (the browser's persistent permission store) — the
-native "attach dialog" notion does not apply.
-
-> Note: this is a deliberate, Android-appropriate reading of the Web Serial
-> spec's `getPorts()` ("ports the site has been granted access to"). On Android
-> the unit of access is the OS-level USB permission, so a device the OS has
-> already authorized for the app is, by definition, one the app has been
-> granted access to.
-
-## API
+## API reference
 
 The package exposes:
 
 | Export | Description |
 | --- | --- |
-| `serial` | A ready-to-use `Serial` instance (`navigator.serial` equivalent). |
+| `serial` | A ready-to-use `Serial` instance. |
 | `Serial`, `SerialPort` | The Web Serial API classes. |
 | `UsbSerial` | Lower-level access to the raw USB-serial TurboModule (Android only). |
-| `Event`, `EventTarget` | The event primitives used by the polyfill. |
+| `Event`, `EventTarget` | Polyfill implementations used only when the runtime does not already provide these globals. |
 | Types | `SerialOptions`, `SerialOutputSignals`, `SerialInputSignals`, `SerialPortInfo`, `SerialPortFilter`, `SerialPortRequestOptions`. |
 
 ## Example app
 
-The [`example/`](./example) app is a React Native port of [SimpleUsbTerminal](https://github.com/kai-morich/SimpleUsbTerminal) built entirely on this package's Web Serial API — a **Devices** list (with baud-rate selection) and a **Terminal** (colored receive/send log, HEX mode, newline selection, clear, control-lines row with RTS/DTR toggles, flow control, and Send BREAK).
+The [`example/`](./example) app is a React Native port of [SimpleUsbTerminal](https://github.com/kai-morich/SimpleUsbTerminal) built on this package's Web Serial API. It includes:
+
+- a Devices screen with baud-rate selection
+- a Terminal screen with colored send / receive logs
+- HEX mode
+- newline selection
+- clear
+- control lines with RTS / DTR toggles
+- flow control
+- Send BREAK
+
+### Run the example on Android
 
 ```sh
-# install the library's build tooling
 npm install
-
-# install and run the example on Android
 cd example
 npm install
 npm run android
 ```
 
-Because it uses the Web Serial API, a few SimpleUsbTerminal details map differently:
+Because the example uses the Web Serial API, a few details differ from SimpleUsbTerminal:
 
-- **Driver/chip name** isn't exposed by the Web Serial API (`getInfo()` returns only VID/PID), so rows show `Vendor/Product` plus a best-effort chip label from known vendor IDs.
-- **Flow control** is limited to *None* / *Hardware (RTS-CTS)* — XON/XOFF and DTR/DSR aren't in the Web Serial spec. Changing it reconnects the port.
-- The Android background **foreground-service notification** is omitted (it's service plumbing unrelated to serial I/O).
+- Driver / chip name is not exposed by the Web Serial API. Rows show `Vendor/Product` plus a best-effort chip label from known vendor IDs.
+- Flow control is limited to `None` and `Hardware (RTS-CTS)`. XON/XOFF and DTR/DSR are not in the Web Serial spec. Changing it reconnects the port.
+- The Android foreground-service notification is omitted because it is service plumbing unrelated to serial I/O.
 
 ### Run the example in the browser
 
-The example also runs as a web app via [`react-native-web`](https://necolas.github.io/react-native-web/) + [Vite](https://vite.dev/). On web, the package delegates to the browser's native `navigator.serial`, so the exact same `App.tsx` talks to real serial hardware over WebUSB-style permissions.
+The example also runs as a web app via [`react-native-web`](https://necolas.github.io/react-native-web/) and [Vite](https://vite.dev/). On web, the package delegates to the browser's native `navigator.serial`, so the same `App.tsx` talks to real serial hardware through browser permissions.
 
 ```sh
 cd example
 npm install
-npm run web          # dev server at http://localhost:5173
-# npm run web:build  # production build into example/dist
+npm run web
+# npm run web:build
 ```
 
-> Web Serial only works in **Chromium-based browsers** (Chrome / Edge / Opera) over a **secure context** (`http://localhost` counts), and `requestPort()` must be called from a user gesture — the demo's "Request port" button handles that.
+Web Serial works in Chromium-based browsers over a secure context. `http://localhost` counts. `requestPort()` must be called from a user gesture, and the example's Request port button handles that.
 
-## How it works
+## Testing and simulation
 
-The JavaScript layer (`src/`) implements the Web Serial API on top of a thin TurboModule (`NativeUsbSerial`) whose native Android implementation (`android/src/main/java/dev/webserialapi/`) wraps `usb-serial-for-android`. Reads/writes are bridged to `ReadableStream`/`WritableStream` via [`web-streams-polyfill`](https://github.com/MattiasBuelens/web-streams-polyfill).
-
-## Testing
-
-The same transport seam lets you test without USB hardware, whether you want a
-quick loopback check, a stateful simulated peripheral, or a full WebSocket E2E
-path. The example app also includes a **Self Test** screen and a
-**Virtual device (demo)** mode.
+The transport layer lets you test without USB hardware, whether you want a quick loopback check, a stateful simulated peripheral, or a full WebSocket E2E path. The example app also includes a Self Test screen and a Virtual device (demo) mode.
 
 ### Fast in-memory test
 
@@ -237,9 +224,11 @@ import {createDeviceFixture, SimulatedDevice} from 'react-native-web-serial-api/
 class Thermometer extends SimulatedDevice {
   readonly usbVendorId = 0x10c4;
   readonly usbProductId = 0xea60;
+
   onOpen() {
     this.send('READY\r\n');
   }
+
   emitTemperature(value: number) {
     this.send(`temp=${value}\r\n`);
   }
@@ -255,23 +244,21 @@ expect(await client.readLine()).toBe('temp=21.5');
 await client.close();
 ```
 
-For the full guide to `SerialClient`, `createDeviceFixture`, fault injection,
-`runTestSuite`, `compareTestResults`, `exposeSimulatedDevice`, and the conformance
-suites, see **[TESTING.md](TESTING.md)**.
+For the full guide to `SerialClient`, `createDeviceFixture`, fault injection, `runTestSuite`, `compareTestResults`, `exposeSimulatedDevice`, and the conformance suites, see [TESTING.md](TESTING.md).
 
 ## Remote serial over WebSocket
 
-Drive a **real** serial port that's plugged into another machine — handy for developing in a Chromium browser or an Android emulator that can't see the USB device, or for remote debugging. A small Node bridge exposes the host's serial port over a WebSocket; the app talks to it through `WebSocketSerialTransport`, which is just another `SerialTransport` — so the whole Web Serial API works on top of it unchanged.
+You can drive a real serial port plugged into another machine. This is useful for developing in a Chromium browser or an Android emulator that cannot see the USB device directly, or for remote debugging.
 
-**On the host** (where the device is plugged in), run the bundled CLI (needs the optional `serialport` + `ws` deps, installed automatically on Node hosts):
+On the host machine, run the bundled CLI:
 
 ```sh
 npx -p react-native-web-serial-api expose-serial-websocket \
-  --port /dev/ttyUSB0 --baudrate 115200          # → ws://127.0.0.1:8080
-# add --allow-remote to bind 0.0.0.0 (⚠ exposes the port to the network)
+  --port /dev/ttyUSB0 --baudrate 115200
+# add --allow-remote to bind 0.0.0.0
 ```
 
-**In the app** (browser / React Native), point a `Serial` at it:
+In the app:
 
 ```ts
 import {Serial} from 'react-native-web-serial-api';
@@ -284,9 +271,20 @@ const writer = port.writable!.getWriter();
 await writer.write(new TextEncoder().encode('Hello serial!\n'));
 ```
 
-The example app has this built in: **Devices → menu → “Remote serial (WebSocket)”** (enter the bridge URL).
+The example app includes this under Devices -> menu -> Remote serial (WebSocket).
 
-The WebSocket carries raw serial bytes as **binary** frames and a small JSON **control** protocol as text frames (`setLineCoding`, `setSignals`/`getSignals`, `startReading`/`stopReading`, `flush`, `break`, …). Note: the bridge binds to **localhost by default**; `--allow-remote` makes your serial port reachable from the network — only do that on trusted networks.
+The WebSocket carries raw serial bytes as binary frames and a small JSON control protocol as text frames (`setLineCoding`, `setSignals` / `getSignals`, `startReading` / `stopReading`, `flush`, `break`, and so on). By default the bridge binds to `localhost`. Use `--allow-remote` only on trusted networks.
+
+## Troubleshooting
+
+- If Android never shows your device, confirm USB host support and the device filter.
+- If `requestPort()` does nothing on web, make sure it is called from a button tap or other user gesture.
+- If the app works on web but not Android, check that New Architecture is enabled and the device has Android USB permission.
+- If `getPorts()` is empty on Android, unplug and replug the device, then grant permission again if Android revoked it.
+
+## How it works
+
+The JavaScript layer in `src/` implements the Web Serial API on top of a thin TurboModule (`NativeUsbSerial`) whose native Android implementation in `android/src/main/java/dev/webserialapi/` wraps `usb-serial-for-android`. Reads and writes are bridged to `ReadableStream` / `WritableStream` via [`web-streams-polyfill`](https://github.com/MattiasBuelens/web-streams-polyfill) when the runtime does not already provide Web Streams globals.
 
 ## License
 

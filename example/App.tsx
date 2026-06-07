@@ -45,7 +45,7 @@ function App(): React.JSX.Element {
   }, [demoMode]);
 
   // Remote mode bridges to a real serial port on another machine over a
-  // WebSocket (run `expose-serial-websocket` there). Same SerialTransport seam,
+  // WebSocket (run `expose-serial-websocket` there). Same SerialTransport contract,
   // so the rest of the app is unchanged.
   const remote = React.useMemo(() => {
     if (!remoteUrl) return null;

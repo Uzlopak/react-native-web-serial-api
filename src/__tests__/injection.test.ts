@@ -1,5 +1,5 @@
 /**
- * Verifies the dependency-injection seam: the global `setUsbSerial` override and
+ * Verifies the dependency-injection path: the global `setUsbSerial` override and
  * `Serial`'s constructor injection, plus their precedence.
  */
 import {afterEach, expect, it} from '@jest/globals';
