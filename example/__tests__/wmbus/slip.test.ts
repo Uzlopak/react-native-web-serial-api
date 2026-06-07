@@ -51,4 +51,12 @@ describe('SLIP framing', () => {
     ];
     expect(dec.push(stream)).toEqual([[0x42]]);
   });
+
+  it('drops buffered state on reset', () => {
+    const dec = new SlipDecoder();
+    const encoded = slipEncode([0x0a, 0x0b, 0x0c]);
+    expect(dec.push(encoded.slice(0, 3))).toEqual([]);
+    dec.reset();
+    expect(dec.push(encoded)).toEqual([[0x0a, 0x0b, 0x0c]]);
+  });
 });

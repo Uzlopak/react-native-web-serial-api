@@ -16,6 +16,16 @@ function plain(text: string, color = RED): TerminalSpan {
 }
 
 describe('TerminalLineBuffer', () => {
+  it('starts from a custom id and preserves the next id after clear', () => {
+    const initial = createTerminalLineBuffer(42);
+    expect(initial.lines).toEqual([{id: 42, spans: []}]);
+    expect(initial.nextId).toBe(43);
+
+    const cleared = clearTerminalLineBuffer(initial);
+    expect(cleared.lines).toEqual([{id: 43, spans: []}]);
+    expect(cleared.nextId).toBe(44);
+  });
+
   it('splits incoming spans into discrete lines', () => {
     const next = appendTerminalSpans(
       createTerminalLineBuffer(),
@@ -45,6 +55,21 @@ describe('TerminalLineBuffer', () => {
     ]);
   });
 
+  it('initializes empty buffers, ignores empty spans, and honors the minimum line cap', () => {
+    const next = appendTerminalSpans(
+      {lines: [], nextId: 7},
+      [{text: '', color: GREEN, caret: false}, plain('\nX', GREEN)],
+      0,
+    );
+
+    expect(next.lines).toHaveLength(1);
+    expect(next.lines[0]).toEqual({
+      id: 8,
+      spans: [{text: 'X', color: GREEN, caret: false}],
+    });
+    expect(next.nextId).toBe(9);
+  });
+
   it('drops only a trailing caret ^M from the latest non-empty line', () => {
     const state = appendTerminalSpans(
       createTerminalLineBuffer(),
@@ -56,6 +81,26 @@ describe('TerminalLineBuffer', () => {
     expect(next.lines[0].spans).toEqual([
       {text: 'ab', color: RED, caret: false},
     ]);
+  });
+
+  it('leaves buffers unchanged when there is nothing to trim', () => {
+    const state = {
+      lines: [{id: 1, spans: [{text: '^M', color: GREEN, caret: false}]}],
+      nextId: 2,
+    };
+    expect(dropTrailingCaretM(state)).toEqual(state);
+    const empty = {lines: [{id: 1, spans: []}], nextId: 2};
+    expect(dropTrailingCaretM(empty)).toBe(empty);
+  });
+
+  it('does not trim other trailing caret escapes', () => {
+    const state = appendTerminalSpans(
+      createTerminalLineBuffer(),
+      [plain('ab'), {text: '^J', color: GREEN, caret: true}],
+      50,
+    );
+
+    expect(dropTrailingCaretM(state)).toEqual(state);
   });
 
   it('caps old lines and keeps the latest tail', () => {
@@ -80,12 +125,13 @@ describe('TerminalLineBuffer', () => {
           spans: [plain('A'), {text: '^M', color: GREEN, caret: true}],
         },
         {type: 'dropTrailingCaretM'},
+        {type: 'clear'},
         {type: 'append', spans: [plain('B\n')]},
       ],
       50,
     );
     expect(next.lines.map(l => l.spans.map(s => s.text).join(''))).toEqual([
-      'AB',
+      'B',
       '',
     ]);
 
@@ -93,5 +139,21 @@ describe('TerminalLineBuffer', () => {
     expect(cleared.lines).toHaveLength(1);
     expect(cleared.lines[0].spans).toHaveLength(0);
     expect(cleared.nextId).toBeGreaterThan(next.nextId);
+  });
+
+  it('supports a standalone clear op in the log pipeline', () => {
+    const next = applyTerminalLogOps(
+      createTerminalLineBuffer(9),
+      [{type: 'clear'}],
+      50,
+    );
+
+    expect(next.lines).toEqual([{id: 10, spans: []}]);
+    expect(next.nextId).toBe(11);
+  });
+
+  it('returns the same buffer when there are no log ops', () => {
+    const state = createTerminalLineBuffer(9);
+    expect(applyTerminalLogOps(state, [], 50)).toBe(state);
   });
 });

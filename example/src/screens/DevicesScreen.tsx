@@ -48,7 +48,7 @@ function hex4(n: number | undefined): string {
 
 // The Web Serial API only exposes VID/PID (not the driver/chip class), so we
 // derive a best-effort label from known USB-serial vendor IDs.
-function chipLabel(vendorId: number | undefined): string {
+export function chipLabel(vendorId: number | undefined): string {
   switch (vendorId) {
     case 0x0403:
       return 'FTDI';

@@ -86,9 +86,10 @@ export function dropTrailingCaretM(
       continue;
     }
     const last = line.spans[line.spans.length - 1];
-    if (last.caret && last.text === '^M') {
-      line.spans = line.spans.slice(0, line.spans.length - 1);
+    if (!last.caret || last.text !== '^M') {
+      return {lines, nextId: state.nextId};
     }
+    line.spans = line.spans.slice(0, line.spans.length - 1);
     return {lines, nextId: state.nextId};
   }
 
@@ -102,12 +103,16 @@ export function applyTerminalLogOps(
 ): TerminalLineBuffer {
   let next = state;
   for (const op of ops) {
-    if (op.type === 'append') {
-      next = appendTerminalSpans(next, op.spans, maxLines);
-    } else if (op.type === 'dropTrailingCaretM') {
-      next = dropTrailingCaretM(next);
-    } else if (op.type === 'clear') {
-      next = createTerminalLineBuffer(next.nextId);
+    switch (op.type) {
+      case 'append':
+        next = appendTerminalSpans(next, op.spans, maxLines);
+        break;
+      case 'dropTrailingCaretM':
+        next = dropTrailingCaretM(next);
+        break;
+      case 'clear':
+        next = createTerminalLineBuffer(next.nextId);
+        break;
     }
   }
   return next;

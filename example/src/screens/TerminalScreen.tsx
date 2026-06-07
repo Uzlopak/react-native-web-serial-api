@@ -536,6 +536,7 @@ export function TerminalScreen({port, settings, onBack}: Props) {
       <View style={styles.divider} />
 
       <FlatList
+        testID="terminal-log"
         ref={logListRef}
         data={logLines}
         keyExtractor={item => String(item.id)}

@@ -9,4 +9,9 @@ module.exports = {
     '^react-native$': '<rootDir>/node_modules/react-native',
     '^react$': '<rootDir>/node_modules/react',
   },
+  // Conformance modules are intentionally exercised by the screen tests, but we
+  // don't want their large protocol matrices to count toward coverage targets.
+  coveragePathIgnorePatterns: [
+    '<rootDir>/src/devices/.*/conformance\\.ts$',
+  ],
 };
