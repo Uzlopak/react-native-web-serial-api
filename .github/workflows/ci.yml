@@ -32,7 +32,6 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --ignore-scripts
-      - run: npm ci --ignore-scripts --prefix example
       - name: Typecheck example
         working-directory: example
         run: npx tsc --noEmit
