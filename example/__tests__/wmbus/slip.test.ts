@@ -59,4 +59,9 @@ describe('SLIP framing', () => {
     dec.reset();
     expect(dec.push(encoded)).toEqual([[0x0a, 0x0b, 0x0c]]);
   });
+
+  it('passes through an unknown escaped byte unchanged', () => {
+    const dec = new SlipDecoder();
+    expect(dec.push([SLIP.END, SLIP.ESC, 0x01, SLIP.END])).toEqual([[0x01]]);
+  });
 });

@@ -67,6 +67,30 @@ it('shows progress and results for a passing virtual suite', async () => {
   expect(screen.getByText('✓')).toBeTruthy();
 });
 
+it('shows a running label without a total when the suite has not reported one', async () => {
+  let resolveRun: (() => void) | undefined;
+  conformance.runSerialConformance.mockImplementation(async progress => {
+    progress?.onStart?.('loopback echoes bytes', 0, 0);
+    await new Promise<void>(resolve => {
+      resolveRun = resolve;
+    });
+    return [];
+  });
+
+  render(<SelfTestScreen serial={{} as any} onBack={jest.fn()} />);
+
+  fireEvent.press(screen.getByText('Run conformance suite'));
+  await waitFor(() =>
+    expect(
+      screen.getByText('Running · 0✓ 0✗ — loopback echoes bytes…'),
+    ).toBeTruthy(),
+  );
+  resolveRun?.();
+  await waitFor(() =>
+    expect(screen.getByText('Conformance suite (virtual) — 0/0 passed')).toBeTruthy(),
+  );
+});
+
 it('renders a failure when the connected-device smoke test throws', async () => {
   conformance.runRealDeviceSmokeTest.mockRejectedValueOnce(
     new Error('device unavailable'),

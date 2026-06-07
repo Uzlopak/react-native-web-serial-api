@@ -67,3 +67,62 @@ it('resets to the initial value when the dialog is reopened', () => {
 
   expect(screen.getByDisplayValue('ws://second.example')).toBeTruthy();
 });
+
+it('uses the empty-string default initial value and closes from Cancel', () => {
+  const onSubmit = jest.fn();
+  const onClose = jest.fn();
+
+  render(
+    <PromptDialog
+      visible
+      title="Remote URL"
+      onSubmit={onSubmit}
+      onClose={onClose}
+    />,
+  );
+
+  fireEvent.changeText(screen.getByDisplayValue(''), 'ws://cancel.test');
+  fireEvent.press(screen.getByText('CANCEL'));
+
+  expect(onSubmit).not.toHaveBeenCalled();
+  expect(onClose).toHaveBeenCalledTimes(1);
+});
+
+it('submits from the keyboard submit action', () => {
+  const onSubmit = jest.fn();
+  const onClose = jest.fn();
+
+  render(
+    <PromptDialog
+      visible
+      title="Remote URL"
+      initialValue="  ws://enter.test  "
+      onSubmit={onSubmit}
+      onClose={onClose}
+    />,
+  );
+
+  fireEvent(screen.getByDisplayValue('  ws://enter.test  '), 'submitEditing');
+
+  expect(onSubmit).toHaveBeenCalledWith('ws://enter.test');
+  expect(onClose).toHaveBeenCalledTimes(1);
+});
+
+it('ignores taps on the dialog card itself', () => {
+  const onSubmit = jest.fn();
+  const onClose = jest.fn();
+  render(
+    <PromptDialog
+      visible
+      title="Remote URL"
+      initialValue="ws://tap.test"
+      onSubmit={onSubmit}
+      onClose={onClose}
+    />,
+  );
+
+  fireEvent.press(screen.getByTestId('prompt-card'));
+
+  expect(onSubmit).not.toHaveBeenCalled();
+  expect(onClose).not.toHaveBeenCalled();
+});

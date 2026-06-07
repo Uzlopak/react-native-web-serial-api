@@ -37,4 +37,10 @@ describe('WM-Bus frame helpers', () => {
     const packet = buildWMBusPacket(ADDRESS, [], 0x99);
     expect(packet[1]).toBe(0x99);
   });
+
+  it('defaults to an empty payload when no data is supplied', () => {
+    const packet = buildWMBusPacket(ADDRESS);
+    expect(packet).toHaveLength(1 + 1 + 2 + 4 + 1 + 1);
+    expect(packet.slice(-2)).toEqual([ADDRESS.version, ADDRESS.type]);
+  });
 });

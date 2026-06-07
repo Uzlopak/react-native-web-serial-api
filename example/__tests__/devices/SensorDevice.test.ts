@@ -18,6 +18,7 @@ class ProbeSensorDevice extends SensorDevice {
 describe('SensorDevice', () => {
   afterEach(() => {
     jest.restoreAllMocks();
+    jest.useRealTimers();
   });
 
   it('greets on open, responds to ID? and clears its timer on close', () => {
@@ -53,6 +54,21 @@ describe('SensorDevice', () => {
     expect(device.sent).toEqual(['temp=22.5C\r\n']);
     device.onClose();
     expect(clearIntervalSpy).not.toHaveBeenCalled();
+    expect(randomSpy).toHaveBeenCalled();
+  });
+
+  it('streams periodic readings while open', () => {
+    jest.useFakeTimers({doNotFake: ['queueMicrotask']});
+    const randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0.1234);
+    const device = new ProbeSensorDevice();
+
+    device.onOpen();
+    jest.advanceTimersByTime(1000);
+
+    expect(device.sent).toContain('SENSOR READY\r\n');
+    expect(device.sent).toContain('temp=20.6C\r\n');
+
+    device.onClose();
     expect(randomSpy).toHaveBeenCalled();
   });
 });

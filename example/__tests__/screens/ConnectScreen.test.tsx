@@ -121,3 +121,15 @@ it('covers all setting dialogs and the default initial state', async () => {
   });
   expect(onBack).not.toHaveBeenCalled();
 });
+
+it('formats missing vendor/product ids as zeros', () => {
+  render(
+    <ConnectScreen
+      port={{getInfo: () => ({})} as any}
+      onBack={jest.fn()}
+      onConnect={jest.fn()}
+    />,
+  );
+
+  expect(screen.getByText('Vendor 0000  ·  Product 0000')).toBeTruthy();
+});

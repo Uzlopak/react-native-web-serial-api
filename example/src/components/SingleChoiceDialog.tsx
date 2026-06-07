@@ -39,7 +39,7 @@ export function SingleChoiceDialog<T extends string | number>({
       animationType="fade"
       onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable style={styles.card} onPress={() => {}}>
+        <Pressable testID="choice-card" style={styles.card} onPress={() => {}}>
           <Text style={styles.title}>{title}</Text>
           <ScrollView style={styles.list}>
             {options.map(opt => {

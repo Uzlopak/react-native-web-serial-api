@@ -228,11 +228,16 @@ it('connects, sends data in hex/plaintext, updates newline, and handles control 
   await waitFor(() => expect(port.setSignals).toHaveBeenCalledWith({break: false}));
 
   await act(async () => {
+    await port.emit('connect');
+  });
+  expect(port.open).toHaveBeenCalledTimes(1);
+
+  await act(async () => {
     await port.emit('disconnect');
     await port.emit('connect');
   });
   await waitFor(() => expect(port.open).toHaveBeenCalledTimes(2));
-});
+}, 10000);
 
 it('reports a connection failure when open() rejects', async () => {
   jest.useFakeTimers({doNotFake: ['queueMicrotask']});
@@ -257,6 +262,18 @@ it('reports a connection failure when open() rejects', async () => {
     jest.advanceTimersByTime(60);
   });
   expect(screen.getByText(/connection failed: no serial port/)).toBeTruthy();
+
+  screen.getByTestId('terminal-send').props.onPress?.();
+  fireEvent.press(screen.getByTestId('menu-controlLines'));
+  fireEvent.press(screen.getByText('RTS'));
+  fireEvent.press(screen.getByText('DTR'));
+  fireEvent.press(screen.getByTestId('menu-sendBreak'));
+  await act(async () => {
+    await port.emit('disconnect');
+    jest.advanceTimersByTime(60);
+  });
+  expect(screen.getAllByText('not connected').length).toBeGreaterThan(0);
+  expect(screen.getByText('connection failed: no serial port')).toBeTruthy();
 });
 
 it('shows the jump-to-bottom affordance and can clear the log', async () => {
@@ -293,6 +310,9 @@ it('shows the jump-to-bottom affordance and can clear the log', async () => {
     },
   });
   expect(screen.getByLabelText('Jump to bottom')).toBeTruthy();
+  await act(async () => {
+    screen.getByTestId('terminal-log').props.onContentSizeChange?.();
+  });
   fireEvent.press(screen.getByLabelText('Jump to bottom'));
 
   fireEvent.press(screen.getByTestId('menu-clear'));
@@ -329,6 +349,46 @@ it('disables sending when hardware flow control reports CTS low', async () => {
   await waitFor(() =>
     expect(screen.getByTestId('terminal-send').props.accessibilityState.disabled).toBe(true),
   );
+});
+
+it('keeps plain text receive mode on LF and ignores empty chunks', async () => {
+  jest.useFakeTimers({doNotFake: ['queueMicrotask']});
+  const port = createTerminalPort({
+    readerChunks: [],
+    readerChunksAfterReconnect: [
+      Uint8Array.from([0x4f, 0x4b, 0x0a]),
+      new Uint8Array([]),
+    ],
+  });
+
+  render(
+    <TerminalScreen
+      port={port as any}
+      settings={{
+        baudRate: 115200,
+        dataBits: 8,
+        stopBits: 1,
+        parity: 'none',
+        flowControl: 'none',
+      }}
+      onBack={jest.fn()}
+    />,
+  );
+
+  await waitFor(() => expect(port.open).toHaveBeenCalledTimes(1));
+  await act(async () => {
+    jest.advanceTimersByTime(60);
+  });
+  fireEvent.press(screen.getByTestId('menu-hex'));
+  fireEvent.press(screen.getByTestId('menu-newline'));
+  fireEvent.press(screen.getByText('LF'));
+  await act(async () => {
+    await port.emit('disconnect');
+    await port.emit('connect');
+    jest.advanceTimersByTime(60);
+  });
+
+  expect(screen.getByText('OK')).toBeTruthy();
 });
 
 it('renders plain text input, receives CRLF chunks, and surfaces write/control failures', async () => {

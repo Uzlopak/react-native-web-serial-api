@@ -94,4 +94,9 @@ describe('NmeaGpsDevice', () => {
     port = await mount(gps);
     expect(await readUntil(port, '$GPGGA')).toContain('$GPGGA');
   });
+
+  it('tolerates onClose before the device has ever been opened', () => {
+    const gps = new NmeaGpsDevice({clock: () => FIXED});
+    expect(() => gps.onClose()).not.toThrow();
+  });
 });

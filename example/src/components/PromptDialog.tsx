@@ -46,7 +46,7 @@ export function PromptDialog({
       animationType="fade"
       onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable style={styles.card} onPress={() => {}}>
+        <Pressable testID="prompt-card" style={styles.card} onPress={() => {}}>
           <Text style={styles.title}>{title}</Text>
           <TextInput
             style={styles.input}

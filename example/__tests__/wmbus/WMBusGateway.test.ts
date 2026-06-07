@@ -11,8 +11,10 @@ import {ByteReader} from '../../src/devices/wmbus/bytes';
 import {HciHost} from '../../src/devices/wmbus/HciHost';
 import {
   ApprovalTest,
+  ApprovalStatus,
   DevMgmt,
   GwStatus,
+  encodeHci,
   type HciMessage,
   Sap,
   WMBus,
@@ -24,15 +26,24 @@ import {
   MAX_DEVICE_LIST_ITEMS,
 } from '../../src/devices/wmbus/nvm';
 import {slipEncode} from '../../src/devices/wmbus/slip';
+import {WMBusMeter} from '../../src/devices/wmbus/WMBusMeter';
 import {WMBusGateway} from '../../src/devices/wmbus/WMBusGateway';
 
 const ascii = (b: number[]): string => String.fromCharCode(...b);
 
 /** Mount a gateway simulator and an {@link HciHost} talking to it (host = app). */
 async function mount(variant: ModuleVariant = 'iU891A-XL') {
-  const {port} = await createDeviceFixture(new WMBusGateway(variant));
+  const {port, simulatedDevice: gateway} = await createDeviceFixture(
+    new WMBusGateway(variant),
+  );
   const host = await HciHost.open(port);
-  return {host};
+  return {host, gateway};
+}
+
+class GatewayProbe extends WMBusGateway {
+  emitDefaultPing(): void {
+    this.sendMessage(Sap.DevMgmt, DevMgmt.PingRsp);
+  }
 }
 
 describe('WMBusGateway — Device Management', () => {
@@ -151,6 +162,238 @@ describe('WMBusGateway — Device Management', () => {
     const rsp = await host.request(Sap.DevMgmt, DevMgmt.PingReq);
     expect(rsp.msg).toBe(DevMgmt.PingRsp);
   });
+
+  it('treats a missing SetOpMode payload as application mode', async () => {
+    const rsp = await host.request(Sap.DevMgmt, DevMgmt.SetOpModeReq);
+    expect(rsp.payload).toEqual([0x00]);
+    expect((await host.request(Sap.DevMgmt, DevMgmt.GetOpModeReq)).payload).toEqual([
+      0x00,
+      0x00,
+    ]);
+  });
+});
+
+describe('WMBusGateway — low-level edges', () => {
+  let host: HciHost | null = null;
+
+  afterEach(async () => {
+    if (host) {
+      await host.close();
+      host = null;
+    }
+  });
+
+  it('removes a meter from the in-memory list', async () => {
+    const mounted = await mount();
+    host = mounted.host;
+    const {gateway} = mounted;
+    const meter = new WMBusMeter({
+      address: {
+        manufacturerId: 0x1234,
+        deviceId: 0x56789abc,
+        version: 0x01,
+        type: 0x07,
+      },
+    });
+
+    gateway.addMeter(meter);
+    expect(gateway.getMeters()).toHaveLength(1);
+    gateway.removeMeter(meter);
+    expect(gateway.getMeters()).toHaveLength(0);
+  });
+
+  it('keeps a duplicate meter from being added twice', async () => {
+    const mounted = await mount();
+    host = mounted.host;
+    const {gateway} = mounted;
+    const meter = new WMBusMeter({
+      address: {
+        manufacturerId: 0x1234,
+        deviceId: 0x56789abc,
+        version: 0x01,
+        type: 0x07,
+      },
+    });
+
+    gateway.addMeter(meter);
+    gateway.addMeter(meter);
+    expect(gateway.getMeters()).toHaveLength(1);
+  });
+
+  it('stops adding meters once the device list is full', async () => {
+    const mounted = await mount();
+    host = mounted.host;
+    const {gateway} = mounted;
+
+    for (let i = 0; i < MAX_DEVICE_LIST_ITEMS; i++) {
+      gateway.addMeter(
+        new WMBusMeter({
+          address: {
+            manufacturerId: 0x1234,
+            deviceId: 0x1000 + i,
+            version: 0x01,
+            type: 0x07,
+          },
+        }),
+      );
+    }
+    gateway.addMeter(
+      new WMBusMeter({
+        address: {
+          manufacturerId: 0x1234,
+          deviceId: 0x2000,
+          version: 0x01,
+          type: 0x07,
+        },
+      }),
+    );
+    expect(gateway.getMeters()).toHaveLength(MAX_DEVICE_LIST_ITEMS + 1);
+    await host.close();
+    host = null;
+  });
+
+  it('drops packets that fail the address filter', async () => {
+    const mounted = await mount();
+    host = mounted.host;
+    const {gateway} = mounted;
+    await host.request(Sap.WMBus, WMBus.SetActiveConfigReq, [
+      0x02, // link mode on
+      0x0f, 0x00, // options: address filter + rx/tx notify + recal
+      0x00, 0x00, // ui options
+      0x32, 0x00, // LED timing
+      0x88, 0x13, 0x00, 0x00, // recal timeout
+    ]);
+
+    gateway.injectRxPacket([
+      0x0f,
+      0x44,
+      0x34,
+      0x12,
+      0xbc,
+      0x9a,
+      0x78,
+      0x56,
+      0x01,
+      0x07,
+      0x7a,
+    ]);
+
+    const report = new ByteReader(
+      (await host.request(Sap.WMBus, WMBus.GetStatusReportReq)).payload,
+    );
+    report.u8();
+    report.u32le();
+    report.u32le();
+    report.u8();
+    report.u16le();
+    report.u32le();
+    expect(report.u32le()).toBe(1);
+  });
+
+  it('accepts a packet with default RX options and reports the packet info', async () => {
+    const mounted = await mount();
+    host = mounted.host;
+    const {gateway} = mounted;
+
+    await host.request(Sap.WMBus, WMBus.SetActiveConfigReq, [
+      0x02,
+      0x0e, 0x00,
+      0x00, 0x00,
+      0x32, 0x00,
+      0x88, 0x13, 0x00, 0x00,
+    ]);
+    gateway.injectRxPacket([
+      0x0f, 0x44, 0x34, 0x12, 0xbc, 0x9a, 0x78, 0x56, 0x01, 0x07, 0x7a,
+    ]);
+    const evt = await host.recv();
+    expect(evt.msg).toBe(WMBus.RxMessageInd);
+  });
+
+  it('passes through an unknown link mode in packet info', async () => {
+    const mounted = await mount();
+    host = mounted.host;
+    const {gateway} = mounted;
+
+    await host.request(Sap.WMBus, WMBus.SetActiveConfigReq, [
+      0x02,
+      0x0e, 0x00,
+      0x00, 0x00,
+      0x32, 0x00,
+      0x88, 0x13, 0x00, 0x00,
+    ]);
+    gateway.injectRxPacket(
+      [0x0f, 0x44, 0x34, 0x12, 0xbc, 0x9a, 0x78, 0x56, 0x01, 0x07, 0x7a],
+      {linkMode: 99, timestamp: 1234},
+    );
+    const evt = await host.recv();
+    expect(evt.msg).toBe(WMBus.RxMessageInd);
+  });
+
+  it('reports encrypted packet status using the device-list key lookup', async () => {
+    const mounted = await mount();
+    host = mounted.host;
+    const {gateway} = mounted;
+
+    const meter = new WMBusMeter({
+      address: {
+        manufacturerId: 0x1234,
+        deviceId: 0x56789abc,
+        version: 0x01,
+        type: 0x07,
+      },
+      encryptionKey: new Array(16).fill(0xaa),
+    });
+    gateway.addMeter(meter);
+    await host.request(Sap.WMBus, WMBus.SetActiveConfigReq, [
+      0x02,
+      0x0e, 0x00,
+      0x00, 0x00,
+      0x32, 0x00,
+      0x88, 0x13, 0x00, 0x00,
+    ]);
+    gateway.injectRxPacket(
+      [0x0f, 0x44, 0x34, 0x12, 0xbc, 0x9a, 0x78, 0x56, 0x01, 0x07, 0x7a],
+      {encryptionMode: 5, linkMode: 2, timestamp: 1234},
+    );
+    await host.recv();
+
+    gateway.injectRxPacket(
+      [0x0f, 0x44, 0x35, 0x12, 0xbc, 0x9a, 0x78, 0x56, 0x01, 0x07, 0x7a],
+      {encryptionMode: 5, linkMode: 2, timestamp: 1235},
+    );
+    await host.recv();
+  });
+
+  it('drops packets when radio is off or rx-notify is disabled', async () => {
+    const mounted = await mount();
+    host = mounted.host;
+    const {gateway} = mounted;
+
+    gateway.injectRxPacket([0x0f, 0x44, 0x34, 0x12, 0xbc, 0x9a, 0x78, 0x56, 0x01, 0x07, 0x7a]);
+
+    await host.request(Sap.WMBus, WMBus.SetActiveConfigReq, [
+      0x02,
+      0x00, 0x00, // no rx/tx notify
+      0x00, 0x00,
+      0x32, 0x00,
+      0x88, 0x13, 0x00, 0x00,
+    ]);
+    gateway.injectRxPacket([0x0f, 0x44, 0x34, 0x12, 0xbc, 0x9a, 0x78, 0x56, 0x01, 0x07, 0x7a]);
+    await expect(
+      host.expectNoMessage(Sap.WMBus, WMBus.RxMessageInd, 800),
+    ).resolves.toBeUndefined();
+  });
+
+  it('ignores unknown SAP and message ids without breaking the session', async () => {
+    const mounted = await mount();
+    host = mounted.host;
+    await host.raw(slipEncode(encodeHci(0x7f, 0x01)));
+    await host.raw(slipEncode(encodeHci(Sap.DevMgmt, 0xff)));
+    await host.raw(slipEncode(encodeHci(Sap.WMBus, 0xff)));
+    expect((await host.request(Sap.DevMgmt, DevMgmt.PingReq)).msg).toBe(
+      DevMgmt.PingRsp,
+    );
+  });
 });
 
 describe('WMBusGateway — WM-Bus Gateway SAP', () => {
@@ -219,6 +462,22 @@ describe('WMBusGateway — WM-Bus Gateway SAP', () => {
       type: 7,
     });
     expect(got.key).toEqual(new Array(16).fill(0xaa));
+  });
+
+  it('reads the first device-list chunk when index and max are omitted', async () => {
+    await host.request(Sap.WMBus, WMBus.ClearDeviceListReq);
+    await host.request(
+      Sap.WMBus,
+      WMBus.AppendDeviceListReq,
+      encodeDeviceItem({
+        address: {manufacturerId: 1, deviceId: 2, version: 3, type: 4},
+        key: new Array(16).fill(0x11),
+      }),
+    );
+    const read = await host.request(Sap.WMBus, WMBus.ReadDeviceListReq);
+    const rr = new ByteReader(read.payload);
+    expect(rr.u8()).toBe(GwStatus.Ok);
+    expect(rr.remaining).toBe(0);
   });
 
   it('caps the device list and reports DataTruncated on overflow', async () => {
@@ -313,11 +572,116 @@ describe('WMBusGateway — WM-Bus Gateway SAP', () => {
     expect(evt.payload[evt.payload.length - 1]).toBe(0x00); // status = success
   });
 
+  it('sends a message without a Tx notification when disabled', async () => {
+    await host.request(Sap.WMBus, WMBus.SetActiveConfigReq, [
+      0x00,
+      0x00, 0x00, // no rx/tx notify
+      0x00, 0x00,
+      0x32, 0x00,
+      0x88, 0x13, 0x00, 0x00,
+    ]);
+    const rsp = await host.request(Sap.WMBus, WMBus.SendMessageReq, [
+      0x02,
+      0x00,
+      0x44,
+      0x34,
+      0x12,
+      0xbc,
+      0x9a,
+      0x78,
+      0x56,
+      0x01,
+      0x07,
+    ]);
+    expect(rsp.payload).toEqual([GwStatus.Ok]);
+    await expect(
+      host.expectNoMessage(Sap.WMBus, WMBus.MessageTransmittedInd, 800),
+    ).resolves.toBeUndefined();
+  });
+
+  it('encrypts successfully without a Tx notification when disabled', async () => {
+    const mounted = await mount();
+    host = mounted.host;
+    await host.request(Sap.WMBus, WMBus.SetActiveConfigReq, [
+      0x02,
+      0x0a, 0x00, // rx notify only
+      0x00, 0x00,
+      0x32, 0x00,
+      0x88, 0x13, 0x00, 0x00,
+    ]);
+    await host.request(
+      Sap.WMBus,
+      WMBus.AppendDeviceListReq,
+      encodeDeviceItem({
+        address: {manufacturerId: 0, deviceId: 0, version: 0, type: 0},
+        key: new Array(16).fill(0xaa),
+      }),
+    );
+    const rsp = await host.request(Sap.WMBus, WMBus.EncryptSendReq, [
+      0x05,
+      0x02,
+      0x00,
+      0x44,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x7a,
+    ]);
+    expect(rsp.payload).toEqual([GwStatus.Ok]);
+    await expect(
+      host.expectNoMessage(Sap.WMBus, WMBus.EncryptedMessageTransmittedInd, 800),
+    ).resolves.toBeUndefined();
+  });
+
+  it('emits a message from the default sendMessage payload path', async () => {
+    const {port, simulatedDevice: gateway} = await createDeviceFixture(
+      new GatewayProbe(),
+    );
+    const host2 = await HciHost.open(port);
+    gateway.emitDefaultPing();
+    const evt = await host2.recv();
+    expect(evt).toEqual({
+      sap: Sap.DevMgmt,
+      msg: DevMgmt.PingRsp,
+      payload: [],
+    });
+    await host2.close();
+  });
+
+  it('returns NoKey for too-short encrypted content on iU sticks', async () => {
+    const rsp = await host.request(Sap.WMBus, WMBus.EncryptSendReq, [
+      0x05,
+      0x02,
+      0x00,
+      0x44,
+    ]);
+    expect(rsp.payload).toEqual([GwStatus.NoKey]);
+  });
+
   it('rejects Radio Control on an iU891A-XL (USB stick)', async () => {
     await host.close();
     ({host} = await mount('iU891A-XL'));
     const rsp = await host.request(Sap.WMBus, WMBus.GetRadioConfigReq);
     expect(rsp.payload).toEqual([GwStatus.Unsupported]);
+  });
+
+  it('reports wrong radio mode when Approval Test link mode is out of range', async () => {
+    await host.close();
+    ({host} = await mount('iM881A-XL'));
+    await enableStartupEvent(host);
+    await host.request(Sap.DevMgmt, DevMgmt.SetOpModeReq, [0x06]);
+    await waitForStartup(host);
+    const badMode = await host.request(
+      Sap.ApprovalTest,
+      ApprovalTest.EnablePn9Req,
+      [0x00, 0x06, 0x00],
+    );
+    expect(badMode.payload).toEqual([ApprovalStatus.WrongRadioMode]);
   });
 
   it('accepts Encrypt Send Packet on iU891A-XL when key exists for stored address', async () => {
@@ -352,6 +716,11 @@ describe('WMBusGateway — WM-Bus Gateway SAP', () => {
     const {payload} = await host.request(Sap.WMBus, WMBus.GetDefaultConfigReq);
     expect(payload[0]).toBe(GwStatus.Ok);
     expect(payload.length).toBe(12); // status + 11-byte config
+  });
+
+  it('treats a short SetScanMode payload as zero-period scan mode', async () => {
+    const rsp = await host.request(Sap.WMBus, WMBus.SetScanModeReq, [0x01]);
+    expect(rsp.payload).toEqual([GwStatus.Ok]);
   });
 
   it('clears the packet counters on Reset Status Report (0x43)', async () => {
@@ -475,6 +844,24 @@ describe('WMBusGateway — WM-Bus Gateway SAP', () => {
       msg: WMBus.GetWMBusAddressRsp,
       payload: [GwStatus.Unsupported],
     });
+
+    const esp = await host.request(
+      Sap.WMBus,
+      WMBus.EncryptSendPacketReq,
+      [0x05, 0x02, 0x00, 0x44],
+    );
+    expect(esp).toEqual({
+      sap: Sap.WMBus,
+      msg: WMBus.EncryptSendPacketRsp,
+      payload: [GwStatus.Unsupported],
+    });
+  });
+
+  it('drops an unknown WM-Bus message without affecting later requests', async () => {
+    await host.raw(slipEncode(encodeHci(Sap.WMBus, 0xff)));
+    expect((await host.request(Sap.DevMgmt, DevMgmt.PingReq)).msg).toBe(
+      DevMgmt.PingRsp,
+    );
   });
 
   it('round-trips the radio control configuration on iM modules (0x51/0x53)', async () => {
@@ -486,6 +873,54 @@ describe('WMBusGateway — WM-Bus Gateway SAP', () => {
     const get = await host.request(Sap.WMBus, WMBus.GetRadioConfigReq);
     expect(get.payload[0]).toBe(GwStatus.Ok);
     expect(get.payload.slice(1)).toEqual(cfg);
+  });
+
+  it('reports wrong radio mode in Approval Test requests', async () => {
+    await host.close();
+    ({host} = await mount('iM881A-XL'));
+    await enableStartupEvent(host);
+    await host.request(Sap.DevMgmt, DevMgmt.SetOpModeReq, [0x06]);
+    await waitForStartup(host);
+    const badMode = await host.request(
+      Sap.ApprovalTest,
+      ApprovalTest.EnablePn9Req,
+      [0x01, 0x00, 0x00],
+    );
+    expect(badMode.payload).toEqual([0x0d]);
+  });
+
+  it('uses default approval payload bytes when they are omitted', async () => {
+    await host.close();
+    ({host} = await mount('iM881A-XL'));
+    await enableStartupEvent(host);
+    await host.request(Sap.DevMgmt, DevMgmt.SetOpModeReq, [0x06]);
+    await waitForStartup(host);
+    const badMode = await host.request(Sap.ApprovalTest, ApprovalTest.EnablePn9Req);
+    expect(badMode.payload).toEqual([ApprovalStatus.WrongRadioMode]);
+  });
+
+  it('does not claim a stored address on iM modules', async () => {
+    await host.close();
+    ({host} = await mount('iM881A-XL'));
+    const {payload} = await host.request(Sap.WMBus, WMBus.GetStatusReportReq);
+    const r = new ByteReader(payload);
+    r.u8();
+    r.u32le();
+    r.u32le();
+    r.u8();
+    const statusBits = r.u16le();
+    expect(statusBits & (1 << 6)).toBe(0);
+  });
+
+  it('drops an unknown approval-test message when approval mode is active', async () => {
+    await host.close();
+    ({host} = await mount('iM881A-XL'));
+    await enableStartupEvent(host);
+    await host.request(Sap.DevMgmt, DevMgmt.SetOpModeReq, [0x06]);
+    await host.raw(slipEncode(encodeHci(Sap.ApprovalTest, 0xff)));
+    expect((await host.request(Sap.DevMgmt, DevMgmt.PingReq)).msg).toBe(
+      DevMgmt.PingRsp,
+    );
   });
 });
 
@@ -515,6 +950,14 @@ describe('WMBusGateway — restart & startup indication', () => {
     expect(r.u32le()).toBe(0); // reserved
     expect(r.u8()).toBe(0xa3); // module type
 
+    await host.close();
+  }, 10000);
+
+  it('restarts without emitting startup when the option is disabled', async () => {
+    const {host} = await mount('iM881A-XL');
+    const restart = await host.request(Sap.DevMgmt, DevMgmt.RestartReq);
+    expect(restart.msg).toBe(DevMgmt.RestartRsp);
+    await host.expectNoMessage(Sap.DevMgmt, DevMgmt.StartupInd, 1500);
     await host.close();
   }, 10000);
 
@@ -663,6 +1106,11 @@ describe('WMBusGateway — Approval Test SAP (0x20)', () => {
       msg: ApprovalTest.ResetTestRsp,
       payload: [0x00],
     });
+
+    await host.raw(slipEncode(encodeHci(Sap.ApprovalTest, 0xff)));
+    expect((await host.request(Sap.DevMgmt, DevMgmt.PingReq)).msg).toBe(
+      DevMgmt.PingRsp,
+    );
 
     await host.close();
   }, 15000);

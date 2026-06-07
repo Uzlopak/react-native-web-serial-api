@@ -42,6 +42,13 @@ describe('coordinate formatting (ddmm.mmmm / dddmm.mmmm)', () => {
     });
   });
 
+  it('rounds a coordinate that carries minutes across the degree boundary', () => {
+    expect(formatLatitude(12.999999933333333)).toEqual({
+      value: '1300.0000',
+      hemisphere: 'N',
+    });
+  });
+
   it('formats a longitude just west of the prime meridian', () => {
     expect(formatLongitude(-0.0005)).toEqual({
       value: '00000.0300',
@@ -102,6 +109,39 @@ describe('buildCycle (default Greenwich fix)', () => {
   it('matches the golden GGA prefix (fixed clock)', () => {
     const gga = lines.find(l => l.startsWith('$GPGGA'));
     expect(gga).toContain('$GPGGA,120000.00,5128.6111,N,00000.0300,W,1,12,');
+  });
+});
+
+describe('buildCycle (sparse satellite set)', () => {
+  it('pads the GSA satellite id list and still emits a GSV frame', () => {
+    const lines = buildCycle(
+      {
+        ...DEFAULT_FIX,
+        satellitesUsed: 2,
+        satellites: makeSatellites(2, {snrDb: 31}),
+      },
+      FIXED,
+      ['GSA', 'GSV'],
+    );
+
+    const gsa = lines.find(l => l.startsWith('$GPGSA'));
+    expect(gsa).toContain(',01,02,,,,,,,,,,');
+    expect(lines.some(l => l.startsWith('$GPGSV'))).toBe(true);
+  });
+});
+
+describe('buildCycle (no-fix status)', () => {
+  it('uses V status when the receiver reports no fix', () => {
+    const lines = buildCycle(
+      {
+        ...DEFAULT_FIX,
+        fixQuality: 0,
+      },
+      FIXED,
+      ['RMC'],
+    );
+
+    expect(lines[0]).toContain(',V,');
   });
 });
 

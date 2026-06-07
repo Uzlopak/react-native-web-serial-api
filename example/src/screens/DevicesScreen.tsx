@@ -162,10 +162,10 @@ export function DevicesScreen({
       }
       try {
         await transport.requestPermission(row.deviceId);
+        refresh();
       } catch (e: any) {
         setError(e?.message ?? String(e));
       }
-      refresh();
     },
     [transport, refresh],
   );
@@ -263,6 +263,7 @@ export function DevicesScreen({
         }
         renderItem={({item}) => (
           <TouchableOpacity
+            testID={`device-${item.deviceId}`}
             style={styles.item}
             onPress={() =>
               item.hasPermission ? openPermitted(item) : grantPermission(item)

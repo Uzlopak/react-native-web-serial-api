@@ -48,3 +48,30 @@ it('invokes onClose when the backdrop is pressed', () => {
   fireEvent.press(screen.getByText('Settings').parent?.parent ?? screen.getByText('Settings'));
   expect(onClose).toHaveBeenCalledTimes(1);
 });
+
+it('renders disabled items with muted text and does not invoke their action', () => {
+  const onClose = jest.fn();
+  const onPress = jest.fn();
+
+  render(
+    <Menu
+      visible
+      onClose={onClose}
+      items={[
+        {
+          key: 'disabled',
+          title: 'Disabled item',
+          disabled: true,
+          onPress,
+        },
+      ]}
+    />,
+  );
+
+  const text = screen.getByText('Disabled item');
+  expect(text.props.style).toEqual(
+    expect.arrayContaining([expect.objectContaining({opacity: 0.5})]),
+  );
+  expect(onClose).not.toHaveBeenCalled();
+  expect(onPress).not.toHaveBeenCalled();
+});

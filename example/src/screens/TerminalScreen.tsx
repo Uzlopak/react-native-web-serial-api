@@ -87,10 +87,10 @@ export function TerminalScreen({port, settings, onBack}: Props) {
   const [showJumpToBottom, setShowJumpToBottom] = React.useState(false);
   // Stable refs to the latest connect/teardown so the USB attach/detach
   // listeners (registered once) never call stale closures.
-  const connectRef = React.useRef<() => Promise<void>>(async () => {});
-  const teardownRef = React.useRef<(closePort: boolean) => Promise<void>>(
-    async () => {},
-  );
+  const connectRef = React.useRef<(() => Promise<void>) | null>(null);
+  const teardownRef = React.useRef<
+    ((closePort: boolean) => Promise<void>) | null
+  >(null);
 
   React.useEffect(() => {
     hexRef.current = hexEnabled;
@@ -314,14 +314,14 @@ export function TerminalScreen({port, settings, onBack}: Props) {
 
   // Connect on mount; close the port on unmount (intentional leave).
   React.useEffect(() => {
-    connectRef.current();
+    connectRef.current?.();
     return () => {
       flushLogOps();
       if (flushTimerRef.current) {
         clearTimeout(flushTimerRef.current);
         flushTimerRef.current = null;
       }
-      teardownRef.current(true);
+      teardownRef.current?.(true);
     };
   }, [flushLogOps]);
 
@@ -334,11 +334,11 @@ export function TerminalScreen({port, settings, onBack}: Props) {
         return;
       }
       status('device disconnected');
-      teardownRef.current(false);
+      teardownRef.current?.(false);
     };
     const onReconnect = () => {
       status('reconnected');
-      connectRef.current();
+      connectRef.current?.();
     };
     port.addEventListener('disconnect', onDisconnect);
     port.addEventListener('connect', onReconnect);

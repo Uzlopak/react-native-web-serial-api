@@ -201,9 +201,139 @@ it('shows an error when web serial is unavailable', () => {
   ).toBeTruthy();
 });
 
+it('surfaces transport enumeration errors', async () => {
+  const transport = createTransportStub([]);
+  transport.findAllDrivers.mockRejectedValue(new Error('transport boom'));
+
+  render(
+    <DevicesScreen
+      serial={null as any}
+      transport={transport}
+      demoMode={false}
+      onToggleDemo={jest.fn()}
+      onOpenSelfTest={jest.fn()}
+      onSelect={jest.fn()}
+      remoteUrl={null}
+      onSetRemote={jest.fn()}
+    />,
+  );
+
+  await waitFor(() => expect(transport.findAllDrivers).toHaveBeenCalledTimes(1));
+  await act(async () => {
+    await transport.findAllDrivers.mock.results[0]?.value.catch(() => undefined);
+  });
+  await waitFor(() => expect(screen.getByText('transport boom')).toBeTruthy());
+});
+
+it('surfaces web serial enumeration errors', async () => {
+  const serial = createSerialStub();
+  serial.getPorts.mockRejectedValue(new Error('get ports boom'));
+
+  render(
+    <DevicesScreen
+      serial={serial}
+      transport={null}
+      demoMode={false}
+      onToggleDemo={jest.fn()}
+      onOpenSelfTest={jest.fn()}
+      onSelect={jest.fn()}
+      remoteUrl={null}
+      onSetRemote={jest.fn()}
+    />,
+  );
+
+  await waitFor(() => expect(serial.getPorts).toHaveBeenCalledTimes(1));
+  await act(async () => {
+    await serial.getPorts.mock.results[0]?.value.catch(() => undefined);
+  });
+  await waitFor(() => expect(screen.getByText('get ports boom')).toBeTruthy());
+});
+
+it('surfaces device-open and permission-grant failures', async () => {
+  const serial = createSerialStub();
+  serial.getPorts.mockResolvedValue([]);
+  const transport = createTransportStub([
+    {
+      deviceId: 1,
+      portNumber: 0,
+      usbVendorId: 0x0403,
+      usbProductId: 0x6001,
+      hasPermission: true,
+    },
+    {
+      deviceId: 2,
+      portNumber: 0,
+      usbVendorId: 0x10c4,
+      usbProductId: 0xea60,
+      hasPermission: false,
+    },
+  ]);
+  transport.requestPermission.mockRejectedValue(new Error('permission boom'));
+
+  render(
+    <DevicesScreen
+      serial={serial}
+      transport={transport}
+      demoMode={false}
+      onToggleDemo={jest.fn()}
+      onOpenSelfTest={jest.fn()}
+      onSelect={jest.fn()}
+      remoteUrl={null}
+      onSetRemote={jest.fn()}
+    />,
+  );
+
+  await waitFor(() => expect(transport.findAllDrivers).toHaveBeenCalledTimes(1));
+  await act(async () => {
+    await transport.findAllDrivers.mock.results[0]?.value;
+  });
+  await waitFor(() => expect(screen.getByTestId('device-1')).toBeTruthy());
+  await act(async () => {
+    fireEvent.press(screen.getByTestId('device-1'));
+    await Promise.resolve();
+  });
+  await waitFor(() => expect(screen.getByText('Device is no longer available.')).toBeTruthy());
+
+  await waitFor(() => expect(screen.getByTestId('device-2')).toBeTruthy());
+  await act(async () => {
+    fireEvent.press(screen.getByTestId('device-2'));
+    await Promise.resolve();
+  });
+  await waitFor(() => expect(screen.getByText('permission boom')).toBeTruthy());
+});
+
+it('falls back to zeroed ids when the web port info is incomplete', async () => {
+  const serial = createSerialStub();
+  serial.getPorts.mockResolvedValue([
+    {
+      getInfo: () => ({}),
+    },
+  ]);
+
+  render(
+    <DevicesScreen
+      serial={serial}
+      transport={null}
+      demoMode={false}
+      onToggleDemo={jest.fn()}
+      onOpenSelfTest={jest.fn()}
+      onSelect={jest.fn()}
+      remoteUrl={null}
+      onSetRemote={jest.fn()}
+    />,
+  );
+
+  await waitFor(() => expect(serial.getPorts).toHaveBeenCalledTimes(1));
+  await act(async () => {
+    await serial.getPorts.mock.results[0]?.value;
+  });
+  await waitFor(() => expect(screen.getByTestId('device--1')).toBeTruthy());
+  expect(screen.getByText('Vendor 0000, Product 0000')).toBeTruthy();
+});
+
 it('surfaces a request-port error and refreshes on app foreground', async () => {
   const serial = createSerialStub();
-  serial.requestPort.mockRejectedValue(new Error('picker closed'));
+  serial.requestPort.mockRejectedValue('picker closed');
   serial.getPorts.mockResolvedValue([]);
   let appStateListener: ((state: string) => void) | undefined;
   const appState = require('react-native').AppState;

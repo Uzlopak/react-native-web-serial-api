@@ -66,4 +66,19 @@ describe('WMBusMeter', () => {
     );
     meter.stopPeriodic();
   });
+
+  it('detaches cleanly and stops a running timer', () => {
+    jest.useFakeTimers({doNotFake: ['queueMicrotask']});
+    const clearIntervalSpy = jest.spyOn(global, 'clearInterval');
+    const meter = new WMBusMeter({
+      address: ADDRESS,
+      intervalMs: 1000,
+    });
+
+    meter._attach({injectRxPacket: jest.fn()});
+    meter.startPeriodic();
+    meter._detach();
+
+    expect(clearIntervalSpy).toHaveBeenCalled();
+  });
 });

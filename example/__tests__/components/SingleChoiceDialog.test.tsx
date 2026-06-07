@@ -79,3 +79,20 @@ it('closes when cancel is pressed or the backdrop is tapped', () => {
   fireEvent.press(screen.getByText('CANCEL'));
   expect(onClose).toHaveBeenCalledTimes(1);
 });
+
+it('ignores taps on the dialog card itself', () => {
+  const onClose = jest.fn();
+  render(
+    <SingleChoiceDialog
+      visible
+      title="Choose port"
+      selected="a"
+      onSelect={jest.fn()}
+      onClose={onClose}
+      options={[{label: 'Option A', value: 'a'}]}
+    />,
+  );
+
+  fireEvent.press(screen.getByTestId('choice-card'));
+  expect(onClose).not.toHaveBeenCalled();
+});
